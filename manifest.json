@@ -1,0 +1,11 @@
+{
+  "name": "CyberHerd Messaging",
+  "description": "Shared messaging utilities for LNbits extensions (websocket + nostr via nostrclient)",
+  "repos": [
+    {
+      "id": "cyberherd_messaging",
+      "organisation": "lnbits",
+      "repository": "cyberherd_messaging"
+    }
+  ]
+}

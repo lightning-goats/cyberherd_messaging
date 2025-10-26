@@ -1,0 +1,579 @@
+{% extends "base.html" %}
+{% from "macros.jinja" import window_vars with context %}
+
+{% block page %}
+<div class="row q-col-gutter-md">
+  <div class="col-12">
+    <q-card>
+      <q-card-section>
+        <div class="text-h6">CyberHerd Messaging Extension</div>
+      </q-card-section>
+      <q-card-section>
+        <p>Manage message templates for publishing to Nostr and broadcasting to websockets.</p>
+        <p>Other extensions can use the API to publish messages using these templates.</p>
+        
+        {% raw %}
+        <div class="row items-center q-col-gutter-sm q-mt-sm">
+          <div class="col-auto">
+            <q-btn color="secondary" outline label="Import Defaults" @click="importDefaults" />
+          </div>
+          <div class="col-auto">
+            <input type="file" @change="onFileSelected" accept=".json,.py,.txt" />
+          </div>
+          <div class="col-auto">
+            <q-btn color="primary" :disable="!uploadFile" label="Upload Templates" @click="importFromFile" />
+          </div>
+          <div class="col-auto q-ml-lg">
+            <q-toggle
+              v-model="nostrPublishingEnabled"
+              label="Nostr publishing"
+              color="green"
+              @update:model-value="updateSettings"
+            />
+          </div>
+          <div class="col-auto">
+            <q-badge :color="nostrPrivateKeySet ? 'green' : 'grey'" align="middle">
+              {{ nostrPrivateKeySet ? 'Nostr key: SET' : 'Nostr key: NOT SET' }}
+            </q-badge>
+          </div>
+          <div class="col-grow" style="max-width: 320px;">
+            <q-input
+              v-model="nostrPrivateKeyInput"
+              type="password"
+              label="Nostr private key (nsec or hex)"
+              filled
+              dense
+            />
+          </div>
+          <div class="col-auto">
+            <q-btn color="primary" label="Save Key" @click="savePrivateKey" :disable="!nostrPrivateKeyInput" />
+          </div>
+          <div class="col-auto">
+            <q-btn color="negative" outline label="Clear Key" @click="clearPrivateKey" :disable="!nostrPrivateKeySet" />
+          </div>
+          <div class="col-auto">
+            <q-btn color="secondary" outline label="Export JSON" @click="exportJson" />
+          </div>
+          <div class="col-auto">
+            <q-btn color="secondary" outline label="Export Python" @click="exportPy" />
+          </div>
+        </div>
+        {% endraw %}
+      </q-card-section>
+    </q-card>
+  </div>
+
+  <div class="col-12">
+    <q-card>
+      <q-card-section>
+        <div class="text-h6">Message Templates</div>
+      </q-card-section>
+      <q-card-section>
+        <div class="q-mb-md">
+          <div class="row items-center q-col-gutter-sm q-mb-sm">
+            <div class="col-auto" style="min-width: 200px;">
+              <q-select
+                v-model="selectedCategory"
+                :options="categories"
+                label="Select Category"
+                filled
+                dense
+              />
+            </div>
+            <div class="col-auto">
+              <q-btn 
+                size="sm" 
+                color="primary" 
+                icon="add" 
+                label="New Template" 
+                @click="openNewTemplateDialog"
+              />
+            </div>
+            <div class="col-auto">
+              <q-btn 
+                size="sm" 
+                color="warning" 
+                outline 
+                label="Rename Category" 
+                :disable="!selectedCategory"
+                @click="openRenameCategoryDialog"
+              />
+            </div>
+            <div class="col-auto">
+              <q-btn 
+                size="sm" 
+                color="negative" 
+                outline 
+                label="Delete Category" 
+                :disable="!selectedCategory"
+                @click="deleteCategory"
+              />
+            </div>
+          </div>
+        </div>
+
+        <q-table
+          :rows="filteredTemplates"
+          :columns="tableColumns"
+          row-key="key"
+          flat
+        >
+          <template v-slot:body-cell-actions="props">
+            <q-td :props="props">
+              <q-btn 
+                size="sm" 
+                icon="edit" 
+                flat 
+                color="primary" 
+                @click="openEditDialog(props.row)" 
+              />
+              <q-btn 
+                size="sm" 
+                icon="delete" 
+                flat 
+                color="negative" 
+                @click="deleteTemplate(props.row)" 
+              />
+            </q-td>
+          </template>
+        </q-table>
+
+        <!-- New Template Dialog -->
+        <q-dialog v-model="showNewTemplateDialog">
+          <q-card style="width: 90%; max-width: 1200px;">
+            <q-card-section>
+              <div class="text-h6">New Template</div>
+            </q-card-section>
+            <q-card-section>
+              <div class="row q-col-gutter-md q-mb-md">
+                <div class="col-12 col-sm-6">
+                  <q-select
+                    v-model="newTemplate.category"
+                    :options="categories"
+                    label="Category"
+                    filled
+                    dense
+                    use-input
+                    new-value-mode="add-unique"
+                    hint="Select existing or type new category"
+                  />
+                </div>
+                <div class="col-12 col-sm-6">
+                  <q-input
+                    v-model="newTemplate.key"
+                    label="Key (auto-generated)"
+                    filled
+                    dense
+                    readonly
+                    hint="Automatically assigned"
+                  />
+                </div>
+              </div>
+              <q-input
+                v-model="newTemplate.content"
+                type="textarea"
+                label="Content"
+                filled
+                rows="8"
+                hint="Enter the template message content"
+              />
+              <q-input
+                v-model="newTemplate.reply_relay"
+                label="Reply relay URL (optional)"
+                filled
+                dense
+                hint="Optional relay URL to use for replies (e.g. https://relay.example)"
+              />
+            </q-card-section>
+            <q-card-actions align="right">
+              <q-btn flat label="Cancel" color="primary" v-close-popup />
+              <q-btn flat label="Create" color="primary" @click="createTemplate" v-close-popup />
+            </q-card-actions>
+          </q-card>
+        </q-dialog>
+
+        <!-- Edit Template Dialog -->
+        <q-dialog v-model="showEditTemplateDialog">
+          <q-card style="min-width: 500px;">
+            <q-card-section>
+              <div class="text-h6">Edit Template</div>
+            </q-card-section>
+            <q-card-section>
+              <q-input
+                v-model="editingTemplate.content"
+                type="textarea"
+                label="Content"
+                filled
+                rows="5"
+              />
+              <q-input
+                v-model="editingTemplate.reply_relay"
+                label="Reply relay URL (optional)"
+                filled
+                dense
+                hint="Optional relay URL to use for replies"
+              />
+            </q-card-section>
+            <q-card-actions align="right">
+              <q-btn flat label="Cancel" color="primary" v-close-popup />
+              <q-btn flat label="Save" color="primary" @click="saveTemplate" v-close-popup />
+            </q-card-actions>
+          </q-card>
+        </q-dialog>
+
+        <q-dialog v-model="showRenameCategoryDialog">
+          <q-card style="min-width: 350px;">
+            <q-card-section>
+              <div class="text-h6">Rename Category</div>
+            </q-card-section>
+            <q-card-section>
+              <q-input
+                v-model="newCategoryName"
+                label="New Category Name"
+                filled
+                dense
+              />
+            </q-card-section>
+            <q-card-actions align="right">
+              <q-btn flat label="Cancel" color="primary" v-close-popup />
+              <q-btn flat label="Rename" color="primary" @click="renameCategory" v-close-popup />
+            </q-card-actions>
+          </q-card>
+        </q-dialog>
+      </q-card-section>
+    </q-card>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ window_vars(user) }}
+<script>
+  window.app = Vue.createApp({
+    el: '#vue',
+    mixins: [window.windowMixin],
+    data() {
+      return {
+        templates: [],
+        categories: [],
+        selectedCategory: null,
+        uploadFile: null,
+        nostrPublishingEnabled: true,
+        nostrPrivateKeySet: false,
+        nostrPrivateKeyInput: '',
+        showEditTemplateDialog: false,
+        showNewTemplateDialog: false,
+        showRenameCategoryDialog: false,
+  editingTemplate: {},
+  newTemplate: { category: '', key: '', content: '', reply_relay: '' },
+        newCategoryName: '',
+        tableColumns: [
+          { name: 'key', label: 'Key', field: 'key', align: 'left' },
+          { name: 'content', label: 'Content', field: 'content', align: 'left' },
+          { name: 'actions', label: 'Actions', field: 'actions', align: 'right' }
+        ]
+      }
+    },
+    computed: {
+      filteredTemplates() {
+        const templates = !this.selectedCategory 
+          ? this.templates 
+          : this.templates.filter(t => t.category === this.selectedCategory)
+        
+        // Sort by key numerically
+        return templates.sort((a, b) => {
+          const numA = parseFloat(a.key)
+          const numB = parseFloat(b.key)
+          const isNumA = !isNaN(numA)
+          const isNumB = !isNaN(numB)
+          
+          // If both are numbers, sort numerically
+          if (isNumA && isNumB) {
+            return numA - numB
+          }
+          // If only one is a number, numbers come first
+          if (isNumA) return -1
+          if (isNumB) return 1
+          // Otherwise sort alphabetically
+          return a.key.localeCompare(b.key)
+        })
+      }
+    },
+    watch: {
+      'newTemplate.category'(newCategory) {
+        // Auto-update key when category changes in new template dialog
+        if (newCategory && this.showNewTemplateDialog) {
+          const nextKey = this.getNextKeyForCategory(newCategory)
+          this.newTemplate.key = nextKey.toString()
+        }
+      }
+    },
+    created() {
+      this.loadTemplates()
+      this.loadCategories()
+      this.loadSettings()
+    },
+    methods: {
+      async loadTemplates() {
+        try {
+          const response = await LNbits.api.request('GET', '/cyberherd_messaging/api/v1/templates', this.g.user.wallets[0].adminkey)
+          this.templates = response.data.templates || []
+        } catch (error) {
+          console.error('Failed to load templates:', error)
+        }
+      },
+      async loadCategories() {
+        try {
+          const response = await LNbits.api.request('GET', '/cyberherd_messaging/api/v1/templates/categories', this.g.user.wallets[0].adminkey)
+          // Sort categories numerically if they are numbers, otherwise alphabetically
+          this.categories = (response.data.categories || []).sort((a, b) => {
+            const numA = parseFloat(a)
+            const numB = parseFloat(b)
+            const isNumA = !isNaN(numA) && a.trim() !== ''
+            const isNumB = !isNaN(numB) && b.trim() !== ''
+            
+            // If both are valid numbers, sort numerically
+            if (isNumA && isNumB) {
+              return numA - numB
+            }
+            // If only one is a number, numbers come first
+            if (isNumA) return -1
+            if (isNumB) return 1
+            // Otherwise sort alphabetically
+            return a.localeCompare(b)
+          })
+          if (!this.selectedCategory && this.categories.length) {
+            this.selectedCategory = this.categories[0]
+          }
+        } catch (error) {
+          console.error('Failed to load categories:', error)
+        }
+      },
+      async loadSettings() {
+        try {
+          const response = await LNbits.api.request('GET', '/cyberherd_messaging/api/v1/settings', this.g.user.wallets[0].adminkey)
+          if (typeof response.data.nostr_publishing_enabled === 'boolean') {
+            this.nostrPublishingEnabled = response.data.nostr_publishing_enabled
+          }
+          if (typeof response.data.nostr_private_key_set === 'boolean') {
+            this.nostrPrivateKeySet = response.data.nostr_private_key_set
+          }
+        } catch (e) {
+          console.error('Failed to load settings', e)
+        }
+      },
+      async updateSettings() {
+        try {
+          await LNbits.api.request('PUT', '/cyberherd_messaging/api/v1/settings', this.g.user.wallets[0].adminkey, { nostr_publishing_enabled: this.nostrPublishingEnabled })
+        } catch (e) {
+          console.error('Failed to update settings', e)
+        }
+      },
+      async savePrivateKey() {
+        if (!this.nostrPrivateKeyInput) return
+        try {
+          const res = await LNbits.api.request('PUT', '/cyberherd_messaging/api/v1/settings', this.g.user.wallets[0].adminkey, { nostr_private_key: this.nostrPrivateKeyInput })
+          if (res.status && res.status >= 400) {
+            throw new Error('Failed to save key')
+          }
+          this.nostrPrivateKeyInput = ''
+          await this.loadSettings()
+          this.$q && this.$q.notify && this.$q.notify({ type: 'positive', message: 'Nostr key saved.' })
+        } catch (e) { console.error('Failed to save key', e) }
+      },
+      async clearPrivateKey() {
+        if (!confirm('Clear your stored Nostr private key?')) return
+        try {
+          await LNbits.api.request('PUT', '/cyberherd_messaging/api/v1/settings', this.g.user.wallets[0].adminkey, { clear_private_key: true })
+          await this.loadSettings()
+          this.$q && this.$q.notify && this.$q.notify({ type: 'warning', message: 'Nostr key cleared.' })
+        } catch (e) { console.error('Failed to clear key', e) }
+      },
+      getNextKeyForCategory(category) {
+        // Find all numeric keys in the selected category
+        const numericKeys = this.templates
+          .filter(t => t.category === category)
+          .map(t => parseInt(t.key))
+          .filter(k => !isNaN(k))
+        
+        // Return max + 1, or 0 if no numeric keys exist
+        return numericKeys.length > 0 ? Math.max(...numericKeys) + 1 : 0
+      },
+      openNewTemplateDialog() {
+        // Pre-fill category with selected category if available
+        const category = this.selectedCategory || ''
+        const nextKey = category ? this.getNextKeyForCategory(category) : ''
+        
+        this.newTemplate = { 
+          category: category, 
+          key: nextKey.toString(), 
+          content: '' 
+        }
+        this.showNewTemplateDialog = true
+      },
+      async createTemplate() {
+        if (!this.newTemplate.category || !this.newTemplate.key || !this.newTemplate.content) {
+          this.$q.notify({ type: 'negative', message: 'All fields are required', timeout: 2000 })
+          return
+        }
+        try {
+          await LNbits.api.request('POST', '/cyberherd_messaging/api/v1/templates', this.g.user.wallets[0].adminkey, {
+            category: this.newTemplate.category,
+            key: this.newTemplate.key,
+            content: this.newTemplate.content,
+            reply_relay: this.newTemplate.reply_relay || null
+          })
+          await this.loadTemplates()
+          await this.loadCategories()
+          // Switch to the new category if it's different
+          this.selectedCategory = this.newTemplate.category
+          this.$q.notify({ type: 'positive', message: 'Template created successfully', timeout: 2000 })
+        } catch (error) {
+          console.error('Failed to create template:', error)
+          LNbits.utils.notifyApiError(error)
+        }
+      },
+      openEditDialog(tmpl) {
+        this.editingTemplate = { ...tmpl }
+        this.showEditTemplateDialog = true
+      },
+      async saveTemplate() {
+        if (!this.editingTemplate.category || !this.editingTemplate.key) return
+        try {
+          await LNbits.api.request('PUT', `/cyberherd_messaging/api/v1/templates/${this.editingTemplate.category}/${this.editingTemplate.key}`, this.g.user.wallets[0].adminkey, { category: this.editingTemplate.category, key: this.editingTemplate.key, content: this.editingTemplate.content, reply_relay: this.editingTemplate.reply_relay || null })
+          await this.loadTemplates()
+          this.$q.notify({ type: 'positive', message: 'Template updated successfully', timeout: 2000 })
+        } catch (error) {
+          console.error('Failed to update template:', error)
+          LNbits.utils.notifyApiError(error)
+        }
+      },
+      async deleteTemplate(tmpl) {
+        if (!confirm('Are you sure you want to delete this template?')) return
+        try {
+          await LNbits.api.request('DELETE', `/cyberherd_messaging/api/v1/templates/${tmpl.category}/${tmpl.key}`, this.g.user.wallets[0].adminkey)
+          // Close any open dialogs and clear editing state
+          this.showEditTemplateDialog = false
+          this.editingTemplate = {}
+          await this.loadTemplates()
+          await this.loadCategories()
+          this.$q.notify({ type: 'positive', message: 'Template deleted successfully', timeout: 2000 })
+        } catch (error) {
+          console.error('Failed to delete template:', error)
+          LNbits.utils.notifyApiError(error)
+        }
+      },
+      async deleteCategory() {
+        if (!this.selectedCategory) return
+        if (!confirm(`Delete all templates in category "${this.selectedCategory}"?`)) return
+        try {
+          await LNbits.api.request('DELETE', `/cyberherd_messaging/api/v1/templates/category/${this.selectedCategory}`, this.g.user.wallets[0].adminkey)
+          this.selectedCategory = null
+          await this.loadTemplates()
+          await this.loadCategories()
+        } catch (error) {
+          console.error('Failed to delete category:', error)
+          LNbits.utils.notifyApiError(error)
+        }
+      },
+      openRenameCategoryDialog() {
+        this.newCategoryName = this.selectedCategory || ''
+        this.showRenameCategoryDialog = true
+      },
+      async renameCategory() {
+        if (!this.selectedCategory || !this.newCategoryName) return
+        try {
+          const response = await LNbits.api.request('PUT', `/cyberherd_messaging/api/v1/templates/category/${this.selectedCategory}/rename`, this.g.user.wallets[0].adminkey, { new_category: this.newCategoryName })
+          this.selectedCategory = response.data.new_category
+          this.newCategoryName = ''
+          await this.loadTemplates()
+          await this.loadCategories()
+        } catch (error) {
+          console.error('Failed to rename category:', error)
+          LNbits.utils.notifyApiError(error)
+        }
+      },
+      async importDefaults() {
+        try {
+          await LNbits.api.request('POST', '/cyberherd_messaging/api/v1/templates/defaults/import', this.g.user.wallets[0].adminkey)
+          await this.loadTemplates()
+          await this.loadCategories()
+        } catch (error) {
+          console.error('Failed to import defaults:', error)
+          LNbits.utils.notifyApiError(error)
+        }
+      },
+      onFileSelected(e) {
+        const files = e.target.files
+        this.uploadFile = files && files[0] ? files[0] : null
+      },
+      async importFromFile() {
+        if (!this.uploadFile) return
+        try {
+          const formData = new FormData()
+          formData.append('file', this.uploadFile)
+          const response = await LNbits.api.request('POST', '/cyberherd_messaging/api/v1/templates/import_file', this.g.user.wallets[0].adminkey, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+          await this.loadTemplates()
+          await this.loadCategories()
+          if (response.data.categories && response.data.categories.length) {
+            this.selectedCategory = response.data.categories[0]
+          }
+          this.uploadFile = null
+        } catch (error) {
+          console.error('Failed to import file:', error)
+          LNbits.utils.notifyApiError(error)
+        }
+      },
+      async exportJson() {
+        try {
+          const url = `/cyberherd_messaging/api/v1/templates/export?fmt=json`
+          const headers = { 'X-Api-Key': this.g.user.wallets[0].adminkey }
+          const r = await fetch(url, { headers })
+          if (!r.ok) {
+            const text = await r.text().catch(() => '')
+            throw new Error(`Export failed: ${r.status} ${r.statusText} ${text}`)
+          }
+          const b = await r.blob()
+          this._triggerDownload(b, `cyberherd_templates_${this.g.user.id}.json`)
+        } catch (error) {
+          console.error('Export JSON failed', error)
+          LNbits.utils.notifyApiError(error)
+        }
+      },
+      async exportPy() {
+        try {
+          const url = `/cyberherd_messaging/api/v1/templates/export?fmt=py`
+          const headers = { 'X-Api-Key': this.g.user.wallets[0].adminkey }
+          const r = await fetch(url, { headers })
+          if (!r.ok) {
+            const text = await r.text().catch(() => '')
+            throw new Error(`Export failed: ${r.status} ${r.statusText} ${text}`)
+          }
+          const b = await r.blob()
+          this._triggerDownload(b, `cyberherd_templates_${this.g.user.id}.py`)
+        } catch (error) {
+          console.error('Export PY failed', error)
+          LNbits.utils.notifyApiError(error)
+        }
+      },
+      _triggerDownload(blob, filename) {
+        try {
+          const url = window.URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = filename
+          document.body.appendChild(a)
+          a.click()
+          a.remove()
+          window.URL.revokeObjectURL(url)
+        } catch (e) {
+          console.error('Download failed', e)
+        }
+      },
+    }
+  })
+
+  if (window.i18n) { window.app.use(window.i18n) }
+  if (window.Quasar) { window.app.use(window.Quasar, window.quasarConfig || {}) }
+</script>
+{% endblock %}
