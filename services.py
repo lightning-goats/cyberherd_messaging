@@ -503,6 +503,7 @@ async def _augment_membership_rendered_content(
     *,
     reply_to_30311_event: str | None,
     reply_to_30311_a_tag: str | None,
+    template_overrides: Optional[dict[str, dict[str, Any]]] = None,
 ) -> tuple[str, MessageBundle | None]:
     """Append supplemental membership info (spots/headbutt text) when available."""
     try:
@@ -562,6 +563,7 @@ async def _augment_membership_rendered_content(
             relays=relays,
             reply_to_30311_event=reply_to_30311_event,
             reply_to_30311_a_tag=reply_to_30311_a_tag,
+            template_overrides=template_overrides,
         )
         extras = (bundle.spots_info or "") + (bundle.headbutt_text or "")
         if extras:
@@ -758,11 +760,19 @@ async def render_and_publish_template(
 
     augmented_bundle: MessageBundle | None = None
     if isinstance(values, dict):
+        # Try to load template overrides for this user so the builder prefers DB templates
+        template_overrides = {}
+        try:
+            template_overrides = await _load_template_overrides(values.get("user_id") or values.get("owner_id") or None)
+        except Exception:
+            template_overrides = {}
+
         rendered_content, augmented_bundle = await _augment_membership_rendered_content(
             rendered_content,
             values,
             reply_to_30311_event=reply_to_30311_event,
             reply_to_30311_a_tag=reply_to_30311_a_tag,
+            template_overrides=template_overrides,
         )
     
     if return_websocket_message:
@@ -795,6 +805,60 @@ async def render_and_publish_template(
     )
 
 
+async def _load_template_overrides(user_id: Optional[str]) -> dict[str, dict[str, Any]]:
+    """Fetch message templates from DB and assemble into a mapping suitable
+    for passing into `build_message(..., template_overrides=...)`.
+
+    Returns a mapping: { category: { key: content_or_dict, ... }, ... }
+    User-specific templates (when user_id provided) override global (user_id=None).
+    """
+    from . import crud
+
+    try:
+        # Global templates first
+        global_rows = await crud.get_message_templates(None, None)
+        user_rows: list[Any] = []
+        if user_id:
+            user_rows = await crud.get_message_templates(user_id, None)
+
+        combined: dict[str, dict[str, Any]] = {}
+
+        def _assign(row):
+            cat = row.category or ""
+            combined.setdefault(cat, {})
+            raw = getattr(row, "content", "")
+            parsed: Any = raw
+            if isinstance(raw, str):
+                s = raw.strip()
+                # Try JSON
+                try:
+                    parsed_json = json.loads(s)
+                    if isinstance(parsed_json, dict):
+                        parsed = parsed_json
+                    else:
+                        parsed = s
+                except Exception:
+                    try:
+                        parsed_eval = ast.literal_eval(s)
+                        if isinstance(parsed_eval, dict):
+                            parsed = parsed_eval
+                        else:
+                            parsed = s
+                    except Exception:
+                        parsed = s
+            combined[cat][row.key] = parsed
+
+        for r in global_rows:
+            _assign(r)
+        for r in user_rows:
+            # user overrides take precedence
+            _assign(r)
+
+        return combined
+    except Exception:
+        return {}
+
+
 async def build_message_bundle(
     event_type: str,
     *,
@@ -805,8 +869,16 @@ async def build_message_bundle(
     relays: Optional[list[str]] = None,
     reply_to_30311_event: Optional[str] = None,
     reply_to_30311_a_tag: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> MessageBundle:
     """Expose middleware-equivalent message builder for other modules."""
+    # Load DB template overrides when a user_id is provided (user-specific + global)
+    template_overrides = {}
+    try:
+        template_overrides = await _load_template_overrides(user_id)
+    except Exception:
+        template_overrides = {}
+
     return await _build_message(
         event_type,
         new_amount=new_amount,
@@ -816,6 +888,7 @@ async def build_message_bundle(
         relays=relays,
         reply_to_30311_event=reply_to_30311_event,
         reply_to_30311_a_tag=reply_to_30311_a_tag,
+        template_overrides=template_overrides,
     )
 
 
