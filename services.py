@@ -743,11 +743,12 @@ async def render_and_publish_template(
             if isinstance(values, dict):
                 # Use display names for websocket rendering without mutating original values
                 temp_values = dict(values)
-                temp_values.setdefault("goat_name", bundle.get("names", ""))
+                temp_values["goat_name"] = bundle.get("names", "")
                 values = temp_values
         else:
             if isinstance(values, dict):
-                values.setdefault("goat_name", bundle.get("profiles", ""))
+                # Force-set goat_name to nprofiles for Nostr messages
+                values["goat_name"] = bundle.get("profiles", "")
 
     # Render the template
     try:
@@ -784,6 +785,22 @@ async def render_and_publish_template(
         return (rendered_content, goat_data)
     
     # Publish to nostr
+    # Extract goat pubkeys and add to p_tags for proper Nostr tagging
+    goat_p_tags = []
+    if goat_data_bundle:
+        # goat_data_bundle is raw goats from get_random_goat_names(): [(name, profile, pubkey), ...]
+        for item in goat_data_bundle:
+            if isinstance(item, (list, tuple)) and len(item) >= 3:
+                pubkey_hex = item[2]  # Third element is the pubkey hex
+                if pubkey_hex and isinstance(pubkey_hex, str) and len(pubkey_hex.strip()) == 64:
+                    goat_p_tags.append(pubkey_hex.strip())
+    
+    # Merge goat p_tags with existing p_tags
+    combined_p_tags = list(p_tags or [])
+    for goat_pubkey in goat_p_tags:
+        if goat_pubkey not in combined_p_tags:
+            combined_p_tags.append(goat_pubkey)
+    
     # Normalize template-provided reply_relay if present
     tpl_reply_norm = normalize_relay_hint(tpl_reply) if tpl_reply else None
     if tpl_reply and not tpl_reply_norm:
@@ -797,7 +814,7 @@ async def render_and_publish_template(
     return await publish_note(
         rendered_content,
         e_tags=e_tags,
-        p_tags=p_tags,
+        p_tags=combined_p_tags,
         private_key_hex=private_key,
         reply_to_30311_event=reply_to_30311_event,
         reply_to_30311_a_tag=reply_to_30311_a_tag,
