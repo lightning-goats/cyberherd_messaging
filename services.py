@@ -7,7 +7,7 @@ from typing import Tuple, Optional
 from loguru import logger
 from typing import Any, Optional
 
-from .message_builder import MessageBundle, build_message as _build_message
+from .message_builder import MessageBundle, build_message as _build_message, validate_pubkey_hex
 from .utils import get_random_goat_names, join_with_and
 
 _nostrclient_check_lock = asyncio.Lock()
@@ -295,27 +295,42 @@ async def publish_note(
     for p_id in p_tags or []:
         _append_unique(normalized_p_ids, p_id)
 
+    # Validate and filter p_tags to ensure they're valid hex pubkeys
+    validated_p_ids: list[str] = []
+    for p_id in normalized_p_ids:
+        if not p_id:
+            continue
+        # Import validation function
+        from .message_builder import validate_pubkey_hex
+        if validate_pubkey_hex(p_id):
+            validated_p_ids.append(p_id.strip().lower())
+        else:
+            logger.debug(f"Invalid pubkey in p_tags, skipping: {p_id[:20] if len(p_id) > 20 else p_id}")
+    
     has_reply_context = bool(reply_to_30311_event or e_tags)
 
     if normalized_e_ids:
         relay_hint = normalized_reply or ""
         root_id = normalized_e_ids[0]
-        _add_tag(("e", root_id, relay_hint, "root"))
-
-        next_index = 1
-        if len(normalized_e_ids) > 1:
+        
+        # NIP-10 compliance: For direct replies to root (single event id),
+        # use only "root" marker. For replies with intermediate events,
+        # mark first as "root" and direct parent as "reply".
+        if len(normalized_e_ids) == 1:
+            # Direct reply to root - single "root" marker per NIP-10
+            _add_tag(("e", root_id, relay_hint, "root"))
+        else:
+            # Reply chain with multiple events
+            _add_tag(("e", root_id, relay_hint, "root"))
             reply_id = normalized_e_ids[1]
             _add_tag(("e", reply_id, relay_hint, "reply"))
-            next_index = 2
-        elif has_reply_context:
-            # When only a single event id is known, tag it as both root and reply
-            # so clients thread the response correctly.
-            _add_tag(("e", root_id, relay_hint, "reply"))
+            
+            # Additional events are mentions
+            for e_id in normalized_e_ids[2:]:
+                _add_tag(("e", e_id, "", "mention"))
 
-        for e_id in normalized_e_ids[next_index:]:
-            _add_tag(("e", e_id, "", "mention"))
-
-    for p_id in normalized_p_ids:
+    # Add validated p_tags
+    for p_id in validated_p_ids:
         _add_tag(("p", p_id))
 
     if reply_to_30311_a_tag:
@@ -792,13 +807,21 @@ async def render_and_publish_template(
         for item in goat_data_bundle:
             if isinstance(item, (list, tuple)) and len(item) >= 3:
                 pubkey_hex = item[2]  # Third element is the pubkey hex
-                if pubkey_hex and isinstance(pubkey_hex, str) and len(pubkey_hex.strip()) == 64:
-                    goat_p_tags.append(pubkey_hex.strip())
+                if pubkey_hex and isinstance(pubkey_hex, str):
+                    # Use enhanced validation from message_builder
+                    if validate_pubkey_hex(pubkey_hex):
+                        goat_p_tags.append(pubkey_hex.strip().lower())
+                    else:
+                        logger.debug(
+                            f"Invalid goat pubkey format, skipping: {pubkey_hex[:20]}..."
+                        )
     
-    # Merge goat p_tags with existing p_tags
+    # Merge goat p_tags with existing p_tags (normalize and deduplicate)
     combined_p_tags = list(p_tags or [])
     for goat_pubkey in goat_p_tags:
-        if goat_pubkey not in combined_p_tags:
+        # Normalize existing p_tags for comparison
+        normalized_existing = [p.strip().lower() for p in combined_p_tags]
+        if goat_pubkey not in normalized_existing:
             combined_p_tags.append(goat_pubkey)
     
     # Normalize template-provided reply_relay if present

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from bech32 import bech32_encode, convertbits  # reuse shared dependency
+from bech32 import bech32_decode, bech32_encode, convertbits  # reuse shared dependency
 
 from .defaults import (
     CYBER_HERD_JOIN,
@@ -62,16 +63,79 @@ def format_nostr_event_reference(event_id: Optional[str]) -> Optional[str]:
 
 
 def format_nostr_pubkey(pubkey: Optional[str]) -> Optional[str]:
-    """Convert 32-byte hex pubkey into npub reference."""
+    """Convert 32-byte hex pubkey into npub reference.
+    
+    Args:
+        pubkey: Hex-encoded pubkey (64 characters)
+        
+    Returns:
+        npub-encoded pubkey or None if invalid
+    """
     if not pubkey or not isinstance(pubkey, str):
         return None
     candidate = pubkey.strip().lower()
     if len(candidate) != 64:
         return None
+    # Validate hex format
+    if not re.match(r'^[0-9a-f]{64}$', candidate):
+        return None
     try:
         return hex_to_npub(candidate)
     except Exception:
         return None
+
+
+def validate_pubkey_hex(pubkey: Optional[str]) -> bool:
+    """Validate that a pubkey is properly formatted as 64 hex characters.
+    
+    Args:
+        pubkey: String to validate as hex pubkey
+        
+    Returns:
+        True if valid hex pubkey, False otherwise
+    """
+    if not pubkey or not isinstance(pubkey, str):
+        return False
+    candidate = pubkey.strip().lower()
+    if len(candidate) != 64:
+        return False
+    # Check if all characters are valid hex digits
+    return bool(re.match(r'^[0-9a-f]{64}$', candidate))
+
+
+def validate_nprofile(nprofile: Optional[str]) -> bool:
+    """Validate that an nprofile is properly bech32-encoded.
+    
+    Args:
+        nprofile: String to validate (with or without 'nostr:' prefix)
+        
+    Returns:
+        True if valid nprofile, False otherwise
+    """
+    if not nprofile or not isinstance(nprofile, str):
+        return False
+    
+    candidate = nprofile.strip()
+    
+    # Remove nostr: prefix if present
+    if candidate.startswith("nostr:"):
+        candidate = candidate[6:]
+    
+    # Must start with nprofile1
+    if not candidate.startswith("nprofile1"):
+        return False
+    
+    try:
+        # Validate bech32 encoding
+        hrp, data = bech32_decode(candidate)
+        if hrp != "nprofile":
+            return False
+        if not data:
+            return False
+        # Valid nprofile should decode successfully
+        return True
+    except Exception:
+        return False
 
 
 def _pick_template(pool: Dict[str, Any]) -> Any:
@@ -82,9 +146,32 @@ def _pick_template(pool: Dict[str, Any]) -> Any:
 
 
 def _normalize_nprofile(value: Optional[str]) -> Optional[str]:
-    if value and isinstance(value, str) and not value.startswith("nostr:"):
-        return f"nostr:{value}"
-    return value
+    """Normalize an nprofile by adding 'nostr:' prefix if needed.
+    
+    Validates the nprofile format and returns None if invalid.
+    
+    Args:
+        value: nprofile string (with or without nostr: prefix)
+        
+    Returns:
+        Normalized nprofile with nostr: prefix, or None if invalid
+    """
+    if not value or not isinstance(value, str):
+        return None
+    
+    candidate = value.strip()
+    if not candidate:
+        return None
+    
+    # Validate the nprofile format
+    if not validate_nprofile(candidate):
+        logger.debug(f"Invalid nprofile format: {candidate[:20]}...")
+        return None
+    
+    # Add nostr: prefix if not present
+    if not candidate.startswith("nostr:"):
+        return f"nostr:{candidate}"
+    return candidate
 
 
 def _strip_promotional_link(content: str, *, is_30311_reply: bool) -> str:
