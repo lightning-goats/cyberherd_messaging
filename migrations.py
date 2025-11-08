@@ -84,3 +84,30 @@ async def m003_create_user_settings(db):
         );
         """
     )
+
+
+async def m004_add_reply_relay_column(db):
+    """Add reply_relay column to message_templates table.
+    
+    This column stores the relay URL to use when publishing replies to Nostr.
+    """
+    if db.type in {"POSTGRES", "COCKROACH"}:
+        await db.execute(
+            """
+            ALTER TABLE cyberherd_messaging.message_templates
+            ADD COLUMN IF NOT EXISTS reply_relay TEXT;
+            """
+        )
+    else:  # sqlite
+        # SQLite doesn't support IF NOT EXISTS in ALTER TABLE
+        # Check if column exists first
+        try:
+            await db.execute(
+                """
+                ALTER TABLE cyberherd_messaging.message_templates
+                ADD COLUMN reply_relay TEXT;
+                """
+            )
+        except Exception:
+            # Column likely already exists, ignore
+            pass
