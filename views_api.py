@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from lnbits.core.models import User, WalletTypeInfo
 from lnbits.decorators import require_admin_key, api_key_header, optional_user_id
-from lnbits.core.crud import get_wallet_for_key
+from lnbits.core.crud import get_wallet_for_key, get_user_active_extensions_ids
 
 from . import crud, services
 from .defaults import SEED_DEFAULTS
@@ -65,6 +65,27 @@ cyberherd_messaging_api_router = APIRouter()
 
 
 # ============================================================================
+# Extension Access Helper
+# ============================================================================
+
+async def check_extension_enabled(user_id: str) -> None:
+    """Check if the cyberherd_messaging extension is enabled for the user.
+    
+    Args:
+        user_id: The user ID to check
+        
+    Raises:
+        HTTPException: If extension is not enabled for the user
+    """
+    active_extensions = await get_user_active_extensions_ids(user_id)
+    if "cyberherd_messaging" not in active_extensions:
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="CyberHerd Messaging extension is not enabled for this user."
+        )
+
+
+# ============================================================================
 # Messaging Endpoints - ALL REQUIRE ADMIN KEY FOR SECURITY
 # ============================================================================
 
@@ -83,6 +104,9 @@ async def api_publish_note(
     Security: Requires admin key authentication to prevent unauthorized
     publishing and potential spam attacks.
     """
+    # Check if extension is enabled for user
+    await check_extension_enabled(wallet_info.wallet.user)
+    
     try:
         stored_key = await crud.get_user_setting(wallet_info.wallet.user, "nostr_private_key")
         if not stored_key:
@@ -139,6 +163,9 @@ async def api_ws_broadcast(
     3. Invoice key is used as the WebSocket topic
     4. Message is broadcast to all clients subscribed to that topic
     """
+    # Check if extension is enabled for user
+    await check_extension_enabled(wallet_info.wallet.user)
+    
     # Get the invoice key from the authenticated wallet
     # This ensures messages can only be sent to the wallet's own topic
     topic = wallet_info.wallet.inkey
@@ -160,6 +187,9 @@ async def api_publish_template(
     payload: PublishTemplatePayload,
     wallet_info: WalletTypeInfo = Depends(require_admin_key)
 ) -> dict:
+    # Check if extension is enabled for user
+    await check_extension_enabled(wallet_info.wallet.user)
+    
     template = await crud.get_message_template(wallet_info.wallet.user, payload.category, payload.key)
     if not template:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Template not found")
@@ -195,6 +225,8 @@ async def api_publish_template_with_values(
     payload: PublishTemplateWithValuesPayload,
     wallet_info: WalletTypeInfo = Depends(require_admin_key)
 ) -> dict:
+    # Check if extension is enabled for user
+    await check_extension_enabled(wallet_info.wallet.user)
     try:
         stored_key = await crud.get_user_setting(wallet_info.wallet.user, "nostr_private_key")
         if not stored_key and not payload.return_websocket_message:
@@ -353,6 +385,7 @@ async def api_create_template(
     payload: MessageTemplatePayload,
     wallet_info: WalletTypeInfo = Depends(require_admin_key)
 ):
+    await check_extension_enabled(wallet_info.wallet.user)
     # Allow content to be a serialized dict string containing {content, reply_relay}
     def _extract_content_and_reply(raw: str) -> Tuple[str, Optional[str]]:
         if not isinstance(raw, str):
@@ -393,6 +426,7 @@ async def api_delete_category(
     wallet_info: WalletTypeInfo = Depends(require_admin_key)
 ):
     """Delete all templates in a category."""
+    await check_extension_enabled(wallet_info.wallet.user)
     count = await crud.delete_templates_by_category(wallet_info.wallet.user, category)
     # Return success even if count is 0 (idempotent delete)
     return {"deleted": count, "success": True}
@@ -409,6 +443,7 @@ async def api_rename_category(
     wallet_info: WalletTypeInfo = Depends(require_admin_key)
 ):
     """Rename a category."""
+    await check_extension_enabled(wallet_info.wallet.user)
     count = await crud.rename_category(wallet_info.wallet.user, category, payload.new_category)
     if count == 0:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Category not found")
@@ -423,6 +458,7 @@ async def api_update_template(
     payload: MessageTemplatePayload,
     wallet_info: WalletTypeInfo = Depends(require_admin_key)
 ):
+    await check_extension_enabled(wallet_info.wallet.user)
     success = await crud.update_message_template(
         wallet_info.wallet.user,
         category,
@@ -441,6 +477,7 @@ async def api_delete_template(
     key: str,
     wallet_info: WalletTypeInfo = Depends(require_admin_key)
 ):
+    await check_extension_enabled(wallet_info.wallet.user)
     success = await crud.delete_message_template(wallet_info.wallet.user, category, key)
     if not success:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Template not found")
@@ -465,6 +502,7 @@ async def api_export_templates(
       identifiers are still included in the JSON export (use json format to
       preserve arbitrary category names).
     """
+    await check_extension_enabled(wallet_info.wallet.user)
     # Gather templates for this user
     user_id = wallet_info.wallet.user
     templates = await crud.get_message_templates(user_id, None)
@@ -506,6 +544,7 @@ async def api_export_templates(
 
 @cyberherd_messaging_api_router.post("/api/v1/templates/defaults/import")
 async def api_import_defaults(wallet_info: WalletTypeInfo = Depends(require_admin_key)):
+    await check_extension_enabled(wallet_info.wallet.user)
     created = 0
     for category, mapping in SEED_DEFAULTS.items():
         for key, content in mapping.items():
@@ -654,6 +693,9 @@ async def api_import_file(
         # No authentication provided
         raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Missing authentication. Provide an admin API key or log in.")
 
+    # Check if extension is enabled for this user
+    await check_extension_enabled(user_id)
+
     created = 0
     updated = 0
     categories = set()
@@ -723,6 +765,7 @@ async def api_update_settings(
     Settings changes affect the behavior of the extension and should only
     be performed by authorized administrators.
     """
+    await check_extension_enabled(wallet_info.wallet.user)
     if payload.nostr_publishing_enabled is not None:
         await crud.set_setting(
             "nostr_publishing_enabled", "1" if payload.nostr_publishing_enabled else "0"
