@@ -275,7 +275,7 @@ def _build_spots_and_headbutt_info(
     spots_remaining: int,
     ch_item: Dict[str, Any],
     pool_func: Any,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     """Build spots_info and headbutt_text strings based on remaining spots.
     
     Args:
@@ -284,25 +284,40 @@ def _build_spots_and_headbutt_info(
         pool_func: Function to get template pool (typically _pool from build_message)
     
     Returns:
-        Tuple of (spots_info, headbutt_text)
+        Tuple of (spots_info, nostr_headbutt_text, ws_headbutt_text)
     """
     spots_info = ""
     if spots_remaining > 1:
-        spots_info = f"⚡ {spots_remaining} more spots available. ⚡"
+        spots_info = f"\n\n⚡ {spots_remaining} more spots available. ⚡"
     elif spots_remaining == 1:
-        spots_info = "⚡ 1 more spot available. ⚡"
+        spots_info = "\n\n⚡ 1 more spot available. ⚡"
 
-    headbutt_text = ""
+    nostr_headbutt_text = ""
+    ws_headbutt_text = ""
     if not spots_remaining and ch_item.get("headbutt_info"):
         info = ch_item["headbutt_info"]
         head_tpl = _pick_template(pool_func("headbutt_info", HEADBUTT_INFO))
-        headbutt_text = " " + _format_template(
+        
+        # For nostr: use nprofile/npub if available
+        victim_pubkey = info.get("victim_pubkey", "")
+        victim_nprofile = _normalize_nprofile(info.get("victim_nprofile"))
+        victim_display = info.get("victim_display_name", info.get("victim_name", "Anon"))
+        nostr_victim = format_nostr_pubkey(victim_pubkey) or victim_nprofile or victim_display
+        
+        nostr_headbutt_text = " " + _format_template(
             head_tpl,
             required_sats=info.get("required_sats", 10),
-            victim_name=info.get("victim_name", "Anon"),
+            victim_name=nostr_victim,
+        )
+        
+        # For websocket: use display name only
+        ws_headbutt_text = " " + _format_template(
+            head_tpl,
+            required_sats=info.get("required_sats", 10),
+            victim_name=victim_display,
         )
     
-    return spots_info, headbutt_text
+    return spots_info, nostr_headbutt_text, ws_headbutt_text
 
 
 async def build_message(
@@ -362,7 +377,7 @@ async def build_message(
             or display_name
         )
 
-        spots_info, headbutt_text = _build_spots_and_headbutt_info(spots_remaining, ch_item, _pool)
+        spots_info, nostr_headbutt_text, ws_headbutt_text = _build_spots_and_headbutt_info(spots_remaining, ch_item, _pool)
 
         nostr_content = _format_template(
             template,
@@ -373,7 +388,7 @@ async def build_message(
             event_id=event_id,
         )
         nostr_content = _strip_promotional_link(
-            nostr_content + spots_info + headbutt_text,
+            nostr_content + spots_info + nostr_headbutt_text,
             is_30311_reply=is_30311_reply,
         )
 
@@ -384,7 +399,7 @@ async def build_message(
             difference=difference,
             new_amount=amount,
             event_id=event_id,
-        ) + spots_info + headbutt_text
+        ) + spots_info + ws_headbutt_text
 
         return MessageBundle(
             nostr_content=nostr_content,
@@ -392,7 +407,7 @@ async def build_message(
             spots_info=spots_info,
             goat_data=None,
             spots_remaining=spots_remaining,
-            headbutt_text=headbutt_text,
+            headbutt_text=nostr_headbutt_text,
         )
 
     if event_type in {"feeder_triggered", "feeder_trigger_bolt12", "sats_received"}:
@@ -487,22 +502,37 @@ async def build_message(
             victim_amount=victim_amount,
         )
 
-        headbutt_text = ""
+        nostr_headbutt_text = ""
+        ws_headbutt_text = ""
         if ch_item.get("next_headbutt_info"):
             info = ch_item["next_headbutt_info"]
             next_tpl = _pick_template(_pool("headbutt_info", HEADBUTT_INFO))
-            headbutt_text = " " + _format_template(
+            
+            # For nostr: use nprofile/npub if available
+            next_victim_pubkey = info.get("victim_pubkey", "")
+            next_victim_nprofile = _normalize_nprofile(info.get("victim_nprofile"))
+            next_victim_display = info.get("victim_display_name", info.get("victim_name", "Anon"))
+            next_nostr_victim = format_nostr_pubkey(next_victim_pubkey) or next_victim_nprofile or next_victim_display
+            
+            nostr_headbutt_text = " " + _format_template(
                 next_tpl,
                 required_sats=info.get("required_sats", 10),
-                victim_name=info.get("victim_name", "Anon"),
+                victim_name=next_nostr_victim,
+            )
+            
+            # For websocket: use display name only
+            ws_headbutt_text = " " + _format_template(
+                next_tpl,
+                required_sats=info.get("required_sats", 10),
+                victim_name=next_victim_display,
             )
 
-        nostr_content = _strip_promotional_link(base_note + headbutt_text, is_30311_reply=is_30311_reply)
-        websocket_content = base_client + headbutt_text
+        nostr_content = _strip_promotional_link(base_note + nostr_headbutt_text, is_30311_reply=is_30311_reply)
+        websocket_content = base_client + ws_headbutt_text
         return MessageBundle(
             nostr_content=nostr_content,
             websocket_content=websocket_content,
-            headbutt_text=headbutt_text,
+            headbutt_text=nostr_headbutt_text,
         )
 
     if event_type == "headbutt_failure":
@@ -563,7 +593,7 @@ async def build_message(
         increase_amount = ch_item.get("new_zap_amount", 0)
         nostr_name = format_nostr_pubkey(pub_key) or nprofile or display_name
 
-        spots_info, headbutt_text = _build_spots_and_headbutt_info(spots_remaining, ch_item, _pool)
+        spots_info, nostr_headbutt_text, ws_headbutt_text = _build_spots_and_headbutt_info(spots_remaining, ch_item, _pool)
 
         nostr_content = _format_template(
             template,
@@ -572,7 +602,7 @@ async def build_message(
             new_total=amount,
         )
         nostr_content = _strip_promotional_link(
-            nostr_content + spots_info + headbutt_text,
+            nostr_content + spots_info + nostr_headbutt_text,
             is_30311_reply=is_30311_reply,
         )
 
@@ -581,14 +611,14 @@ async def build_message(
             member_name=display_name,
             increase_amount=increase_amount,
             new_total=amount,
-        ) + spots_info + headbutt_text
+        ) + spots_info + ws_headbutt_text
 
         return MessageBundle(
             nostr_content=nostr_content,
             websocket_content=websocket_content,
             spots_info=spots_info,
             spots_remaining=spots_remaining,
-            headbutt_text=headbutt_text,
+            headbutt_text=nostr_headbutt_text,
         )
 
     if event_type == "daily_reset":
@@ -643,22 +673,22 @@ async def build_message(
             nprofile = _normalize_nprofile(ch_item.get("nprofile"))
             nostr_name = format_nostr_pubkey(pub_key) or nprofile or display_name
 
-            spots_info, headbutt_text = _build_spots_and_headbutt_info(spots_remaining, ch_item, _pool)
+            spots_info, nostr_headbutt_text, ws_headbutt_text = _build_spots_and_headbutt_info(spots_remaining, ch_item, _pool)
 
             nostr_content = _format_template(template, name=nostr_name)
             nostr_content = _strip_promotional_link(
-                nostr_content + spots_info + headbutt_text,
+                nostr_content + spots_info + nostr_headbutt_text,
                 is_30311_reply=is_30311_reply,
             )
 
-            websocket_content = _format_template(template, name=display_name) + spots_info + headbutt_text
+            websocket_content = _format_template(template, name=display_name) + spots_info + ws_headbutt_text
 
             return MessageBundle(
                 nostr_content=nostr_content,
                 websocket_content=websocket_content,
                 spots_info=spots_info,
                 spots_remaining=spots_remaining,
-                headbutt_text=headbutt_text,
+                headbutt_text=nostr_headbutt_text,
             )
 
         # Headbutt failure for reposts/reactions (specialised messages)
@@ -746,7 +776,7 @@ async def build_message(
 
             attacker_amount = ch_item.get("attacker_amount", 0)
 
-            spots_info, headbutt_text = _build_spots_and_headbutt_info(spots_remaining, ch_item, _pool)
+            spots_info, nostr_headbutt_text, ws_headbutt_text = _build_spots_and_headbutt_info(spots_remaining, ch_item, _pool)
 
             nostr_content = _format_template(
                 template,
@@ -755,7 +785,7 @@ async def build_message(
                 victim_name=nostr_victim,
             )
             nostr_content = _strip_promotional_link(
-                nostr_content + spots_info + headbutt_text,
+                nostr_content + spots_info + nostr_headbutt_text,
                 is_30311_reply=is_30311_reply,
             )
 
@@ -764,14 +794,14 @@ async def build_message(
                 attacker_name=attacker_name,
                 attacker_amount=attacker_amount,
                 victim_name=victim_name,
-            ) + spots_info + headbutt_text
+            ) + spots_info + ws_headbutt_text
 
             return MessageBundle(
                 nostr_content=nostr_content,
                 websocket_content=websocket_content,
                 spots_info=spots_info,
                 spots_remaining=spots_remaining,
-                headbutt_text=headbutt_text,
+                headbutt_text=nostr_headbutt_text,
             )
 
         # Last resort fallback for unexpected missing templates
