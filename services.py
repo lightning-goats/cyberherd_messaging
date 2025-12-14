@@ -532,10 +532,11 @@ async def _augment_membership_rendered_content(
         ch_item = values.get("cyber_herd_item") if isinstance(values.get("cyber_herd_item"), dict) else {}
         ch_item = dict(ch_item)  # shallow copy so we can augment safely
 
+        # Note: don't use values.get("name") as fallback since "name" is often the nostr-formatted
+        # name (npub/nprofile) intended for nostr messages, not the human-readable display name
         display_name = (
             values.get("member_display_name")
             or values.get("display_name")
-            or values.get("name")
             or ch_item.get("display_name")
             or "Anon"
         )
@@ -765,6 +766,21 @@ async def render_and_publish_template(
                 # Force-set goat_name to nprofiles for Nostr messages
                 values["goat_name"] = bundle.get("profiles", "")
 
+    # For websocket messages, substitute {name} with display name instead of nprofile
+    if return_websocket_message and isinstance(values, dict):
+        # Get display_name from various possible sources
+        display_name_for_ws = (
+            values.get("member_display_name")
+            or values.get("display_name")
+            or (values.get("cyber_herd_item", {}) or {}).get("display_name")
+        )
+        # Only substitute if we have a display name and the current name looks like an nprofile
+        if display_name_for_ws:
+            current_name = values.get("name", "")
+            if isinstance(current_name, str) and ("nostr:" in current_name or current_name.startswith("nprofile")):
+                values = dict(values)
+                values["name"] = display_name_for_ws
+
     # Render the template
     try:
         rendered_content = str(template_str).format(**values)
@@ -797,7 +813,11 @@ async def render_and_publish_template(
             goat_data = augmented_bundle.goat_data
         elif goat_data_bundle:
             goat_data = _normalize_goat_data(goat_data_bundle)
-        return (rendered_content, goat_data)
+        # Use websocket_content from bundle if available (contains display names instead of nprofiles)
+        ws_content = rendered_content
+        if augmented_bundle and augmented_bundle.websocket_content:
+            ws_content = augmented_bundle.websocket_content
+        return (ws_content, goat_data)
     
     # Publish to nostr
     # Extract goat pubkeys and add to p_tags for proper Nostr tagging
