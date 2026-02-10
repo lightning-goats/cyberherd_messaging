@@ -10,8 +10,39 @@ from typing import Any, Optional
 from .message_builder import MessageBundle, build_message as _build_message, validate_pubkey_hex
 from .utils import get_random_goat_names, join_with_and
 
-_nostrclient_check_lock = asyncio.Lock()
+_nostrclient_check_lock: Optional[asyncio.Lock] = None
 _nostrclient_available: Optional[bool] = None
+
+
+def _get_nostrclient_check_lock() -> asyncio.Lock:
+    """Lazy-init the nostrclient check lock to avoid binding to import-time event loop."""
+    global _nostrclient_check_lock
+    if _nostrclient_check_lock is None:
+        _nostrclient_check_lock = asyncio.Lock()
+    return _nostrclient_check_lock
+
+
+class _SafeFormatter(string.Formatter):
+    """Formatter that only allows simple variable substitution.
+
+    Blocks attribute access (e.g. ``{foo.__class__}``), item access
+    (e.g. ``{foo[0]}``), and other traversal patterns that could leak
+    internals via ``str.format(**user_dict)``.
+    """
+
+    def get_field(self, field_name, args, kwargs):
+        if not isinstance(field_name, str) or not field_name.isidentifier():
+            raise ValueError(
+                f"Only simple variable names allowed in templates, got: {field_name!r}"
+            )
+        try:
+            return kwargs[field_name], field_name
+        except KeyError:
+            # Leave unresolved placeholders intact
+            return f"{{{field_name}}}", field_name
+
+
+_safe_fmt = _SafeFormatter()
 
 
 def normalize_relay_hint(raw: str | None) -> str | None:
@@ -47,7 +78,7 @@ async def _is_nostrclient_available() -> bool:
     if _nostrclient_available is not None:
         return _nostrclient_available
 
-    async with _nostrclient_check_lock:
+    async with _get_nostrclient_check_lock():
         if _nostrclient_available is not None:
             return _nostrclient_available
 
@@ -166,33 +197,36 @@ def _prepare_private_key(raw_value: str | None) -> tuple[str | None, int, Except
     return None, sanitized_len, ValueError(f"invalid length {sanitized_len}")
 
 
-def create_and_sign_event(content: str, private_key_hex: str, tags: list[tuple[str, str]]):
-    """Create and sign a Nostr event using LNbits built-in nostrclient.
-    
+async def create_and_sign_event(
+    content: str,
+    private_key: Any,
+    tags: list[tuple[str, ...]] | None = None,
+) -> Any:
+    """Create and sign a Nostr event using nostrclient components.
+
     Args:
-        content: The note content
-        private_key_hex: The private key as a hex string (64 chars)
-        tags: List of (tag_name, tag_value) tuples
-        
+        content: The message content
+        private_key: PrivateKey object or hex string
+        tags: Optional list of tags
+
     Returns:
         Signed Event object
-        
-    Raises:
-        RuntimeError: If nostrclient components are not available
     """
     try:
         from lnbits.extensions.nostrclient.nostr.event import Event
         from lnbits.extensions.nostrclient.nostr.key import PrivateKey
     except ImportError as e:
-        raise RuntimeError(f"nostrclient not installed or unavailable: {e}")
+        raise RuntimeError(f"nostrclient components unavailable: {e}")
 
-    try:
-        import secp256k1  # type: ignore
-    except Exception as e:
-        raise RuntimeError(f"secp256k1 not installed: {e}")
+    # Convert to PrivateKey object if needed
+    if isinstance(private_key, str):
+        try:
+            privkey_obj = PrivateKey(bytes.fromhex(private_key))
+        except Exception as e:
+            raise ValueError(f"Invalid private key hex: {e}")
+    else:
+        privkey_obj = private_key
 
-    # Create private key object and extract public key
-    privkey_obj = PrivateKey(bytes.fromhex(private_key_hex))
     pubkey = privkey_obj.public_key.hex()
 
     # Use kind 1311 for 30311 replies, kind 1 for regular posts
@@ -362,16 +396,10 @@ async def publish_note(
         return False
 
     try:
-        signed_event = create_and_sign_event(content, sanitized_key, all_tags)
-    except RuntimeError as exc:
-        logger.error(
-            f"cyberherd_messaging: failed to create/sign event: {type(exc).__name__}: {exc}"
-        )
-        return False
+        signed_event = await create_and_sign_event(content, sanitized_key, all_tags)
     except Exception as exc:
         logger.error(
-            f"cyberherd_messaging: unexpected error creating/signing event: "
-            f"{type(exc).__name__}: {exc}"
+            f"cyberherd_messaging: failed to create/sign event: {type(exc).__name__}: {exc}"
         )
         return False
 
@@ -783,7 +811,7 @@ async def render_and_publish_template(
 
     # Render the template
     try:
-        rendered_content = str(template_str).format(**values)
+        rendered_content = _safe_fmt.format(str(template_str), **values)
     except Exception as e:
         logger.error(f"Template render failed: {e}")
         if return_websocket_message:

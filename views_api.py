@@ -3,13 +3,16 @@ from typing import Optional, Dict, Any
 
 import ast
 import json
+import re
 from typing import Tuple
 import random
+
+from loguru import logger
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Security
 from pydantic import BaseModel
 
-from lnbits.core.models import User, WalletTypeInfo
+from lnbits.core.models import WalletTypeInfo
 from lnbits.decorators import require_admin_key, api_key_header, optional_user_id
 from lnbits.core.crud import get_wallet_for_key, get_user_active_extensions_ids
 
@@ -130,9 +133,10 @@ async def api_publish_note(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to publish note: {e}")
         raise HTTPException(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, 
-            detail=str(e)
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            detail="Failed to publish note"
         ) from e
 
 
@@ -175,7 +179,6 @@ async def api_ws_broadcast(
     
     return {
         "sent": bool(ok),
-        "topic": topic,  # Return topic for debugging/verification
         "category": payload.category
     }
 
@@ -215,7 +218,8 @@ async def api_publish_template(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=str(e)) from e
+        logger.error(f"Failed to publish template: {e}")
+        raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Failed to publish template") from e
 
 
 @cyberherd_messaging_api_router.post(
@@ -268,7 +272,8 @@ async def api_publish_template_with_values(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=str(e)) from e
+        logger.error(f"Failed to publish template with values: {e}")
+        raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Failed to publish template") from e
 
 
 @cyberherd_messaging_api_router.get("/api/v1/templates")
@@ -288,7 +293,7 @@ async def api_get_templates(
             user_id = wallet.user
 
     templates = await crud.get_message_templates(user_id, category)
-    return {"templates": [t.dict() for t in templates]}
+    return {"templates": [(t.model_dump() if hasattr(t, "model_dump") else t.dict()) for t in templates]}
 
 
 @cyberherd_messaging_api_router.get("/api/v1/templates/categories")
@@ -342,7 +347,7 @@ async def api_get_random_template(
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"No templates found in category '{category}'")
     
     template = random.choice(templates)
-    return template.dict()
+    return template.model_dump() if hasattr(template, "model_dump") else template.dict()
 
 
 @cyberherd_messaging_api_router.get("/api/v1/templates/{category}/{key}")
@@ -377,7 +382,7 @@ async def api_get_template(
     if not template:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Template not found")
     
-    return template.dict()
+    return template.model_dump() if hasattr(template, "model_dump") else template.dict()
 
 
 @cyberherd_messaging_api_router.post("/api/v1/templates", status_code=HTTPStatus.CREATED)
@@ -415,7 +420,7 @@ async def api_create_template(
         tpl_content,
         payload.reply_relay or tpl_reply,
     )
-    return template.dict()
+    return template.model_dump() if hasattr(template, "model_dump") else template.dict()
 
 
 # Category-specific routes must come BEFORE generic {category}/{key} routes
@@ -530,14 +535,16 @@ async def api_export_templates(
         body = "".join(lines)
         from fastapi.responses import Response
 
-        filename = f"cyberherd_templates_{user_id}.py"
+        safe_uid = re.sub(r'[^a-zA-Z0-9_-]', '_', user_id or 'unknown')
+        filename = f"cyberherd_templates_{safe_uid}.py"
         headers = {"Content-Disposition": f"attachment; filename=\"{filename}\""}
         return Response(content=body, media_type="text/x-python", headers=headers)
 
     # Default: JSON export (round-trippable)
     from fastapi.responses import JSONResponse
 
-    filename = f"cyberherd_templates_{user_id}.json"
+    safe_uid = re.sub(r'[^a-zA-Z0-9_-]', '_', user_id or 'unknown')
+    filename = f"cyberherd_templates_{safe_uid}.json"
     headers = {"Content-Disposition": f"attachment; filename=\"{filename}\""}
     return JSONResponse(content=mapping, headers=headers)
 
@@ -651,7 +658,15 @@ async def api_import_file(
     api_key: Optional[str] = Security(api_key_header),
     session_user_id: Optional[str] = Depends(optional_user_id),
 ):
-    raw = (await file.read()).decode("utf-8", errors="ignore")
+    # Limit upload size to 1 MB to prevent resource exhaustion
+    _MAX_UPLOAD_BYTES = 1_048_576
+    raw_bytes = await file.read(_MAX_UPLOAD_BYTES + 1)
+    if len(raw_bytes) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            detail="File too large. Maximum upload size is 1 MB."
+        )
+    raw = raw_bytes.decode("utf-8", errors="ignore")
 
     payload: Dict[str, Dict[str, str]] = {}
     name_lower = (file.filename or "").lower()
