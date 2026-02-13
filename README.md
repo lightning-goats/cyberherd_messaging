@@ -4,30 +4,29 @@ A comprehensive messaging infrastructure extension for LNbits that provides dual
 
 ## Features
 
-### 🌐 Dual-Channel Messaging
+### Dual-Channel Messaging
 - **Nostr Publishing**: Publish notes to Nostr relays with full NIP-01, NIP-10, and NIP-19 compliance
 - **WebSocket Broadcasting**: Real-time message delivery to connected clients via LNbits core
 
-### 🔐 Security & Privacy
+### Security & Privacy
 - Admin key authentication required for all publishing endpoints
-- Per-user Nostr private key storage
+- Event signing delegated to nsecbunker (no local private key handling)
 - Global toggle for enabling/disabling Nostr publishing
-- Secure key validation and sanitization
 
-### 📝 Template System
+### Template System
 - Database-backed message templates with category organization
 - Dynamic template rendering with variable substitution
 - User-specific template overrides
 - Support for both simple and structured content
 
-### ✅ Full Nostr NIP Compliance
+### Full Nostr NIP Compliance
 - **NIP-01**: Basic protocol flow with proper event structure and signing
 - **NIP-10**: Reply threading with correct e-tag markers (root, reply, mention)
 - **NIP-19**: Bech32 encoding (npub, note, nprofile)
 - **Kind 1**: Regular text notes
 - **Kind 1311**: Replies to kind 30311 events (live chat/communities)
 
-### 🎯 Advanced Features
+### Advanced Features
 - Automatic reply context detection and proper threading
 - P-tag management for participant notifications
 - A-tag support for parameterized replaceable events
@@ -42,16 +41,16 @@ This extension is designed to work with LNbits and requires the `nostrclient` ex
 ### Dependencies
 - LNbits core
 - nostrclient extension (for Nostr publishing)
+- nsecbunker extension (for event signing)
 - bech32 library
-- secp256k1
 
 ## Configuration
 
 ### Global Settings
 - `nostr_publishing_enabled`: Toggle Nostr publishing on/off (default: enabled)
 
-### Per-User Settings
-- `nostr_private_key`: User-specific private key for signing Nostr events
+### Signing
+All event signing is handled by the nsecbunker extension. Configure a key in nsecbunker and grant the `cyberherd_messaging` extension permission to sign events for the desired kinds.
 
 ## Usage
 
@@ -62,10 +61,10 @@ This extension is designed to work with LNbits and requires the `nostrclient` ex
 ```python
 from lnbits.extensions.cyberherd_messaging import services
 
-# Simple note
+# Simple note (wallet_id references the wallet with an nsecbunker key)
 await services.publish_note(
     "Hello from CyberHerd!",
-    private_key_hex="your_64_char_hex_key"
+    wallet_id="your_wallet_id"
 )
 
 # Reply with proper threading (NIP-10 compliant)
@@ -73,7 +72,7 @@ await services.publish_note(
     "This is a reply",
     e_tags=["event_id_to_reply_to"],
     p_tags=["pubkey_to_mention"],
-    private_key_hex="your_64_char_hex_key",
+    wallet_id="your_wallet_id",
     reply_relay="wss://relay.example.com"
 )
 
@@ -83,7 +82,7 @@ await services.publish_note(
     e_tags=["30311_event_id"],
     reply_to_30311_event="30311_event_id",
     reply_to_30311_a_tag="30311:pubkey:identifier",
-    private_key_hex="your_64_char_hex_key"
+    wallet_id="your_wallet_id"
 )
 ```
 
@@ -110,7 +109,7 @@ await services.render_and_publish_template(
     key="welcome_1",
     values={"name": "Alice", "amount": 100},
     e_tags=["parent_event_id"],
-    private_key="your_nsec_or_hex_key"
+    wallet_id="your_wallet_id"
 )
 
 # Return rendered message for WebSocket without publishing
@@ -119,7 +118,8 @@ content, goat_data = await services.render_and_publish_template(
     category="feeder_trigger",
     key="0",
     values={"new_amount": 5000},
-    return_websocket_message=True
+    return_websocket_message=True,
+    wallet_id="your_wallet_id"
 )
 ```
 
@@ -222,13 +222,15 @@ The extension implements proper NIP-10 reply threading:
 
 ### Direct Reply to Root
 ```python
-# Single event ID = root marker only
+# Single event ID = root and reply markers
 await services.publish_note(
     "Reply to root",
     e_tags=["root_event_id"],
-    private_key_hex="key"
+    wallet_id="your_wallet_id"
 )
-# Results in: ["e", "root_event_id", "relay", "root"]
+# Results in:
+# ["e", "root_event_id", "relay", "root"]
+# ["e", "root_event_id", "relay", "reply"]
 ```
 
 ### Reply Chain
@@ -237,7 +239,7 @@ await services.publish_note(
 await services.publish_note(
     "Reply in thread",
     e_tags=["root_id", "parent_id", "mention_id"],
-    private_key_hex="key"
+    wallet_id="your_wallet_id"
 )
 # Results in:
 # ["e", "root_id", "relay", "root"]
@@ -261,12 +263,6 @@ Nprofiles are validated via bech32 decoding:
 - Proper bech32 encoding verified
 - HRP (human-readable part) must be "nprofile"
 - Invalid nprofiles are rejected with debug logging
-
-#### Private Key Sanitization
-Private keys are sanitized and validated:
-- Supports hex, nsec, or 0x-prefixed formats
-- Whitespace and newlines stripped
-- Must be exactly 64 hex characters after normalization
 
 ## Event Types
 
@@ -323,11 +319,12 @@ CREATE TABLE cyberherd_messaging.user_settings (
 
 ### Message Flow
 
-1. **Template Rendering** → Dynamic content generation with variable substitution
-2. **Validation** → Pubkey, nprofile, and content validation
-3. **Message Building** → Dual-format message creation (Nostr + WebSocket)
-4. **Publishing** → 
-   - Nostr: Event signing and relay publishing
+1. **Template Rendering** - Dynamic content generation with variable substitution
+2. **Validation** - Pubkey, nprofile, and content validation
+3. **Message Building** - Dual-format message creation (Nostr + WebSocket)
+4. **Signing** - Event signing via nsecbunker (wallet_id lookup)
+5. **Publishing** -
+   - Nostr: Relay publishing via nostrclient
    - WebSocket: JSON serialization and broadcast
 
 ### Content Formatting

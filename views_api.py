@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from lnbits.core.models import WalletTypeInfo
 from lnbits.decorators import require_admin_key, api_key_header, optional_user_id
-from lnbits.core.crud import get_wallet_for_key, get_user_active_extensions_ids
+from lnbits.core.crud import get_wallet_for_key, get_user_active_extensions_ids, get_wallets
 
 from . import crud, services
 from .defaults import SEED_DEFAULTS
@@ -111,22 +111,22 @@ async def api_publish_note(
     await check_extension_enabled(wallet_info.wallet.user)
     
     try:
-        stored_key = await crud.get_user_setting(wallet_info.wallet.user, "nostr_private_key")
-        if not stored_key:
+        bunker_wid = await services.find_bunker_wallet(wallet_info.wallet.user)
+        if not bunker_wid:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
-                detail="No stored Nostr private key configured",
+                detail="No nsecbunker key configured",
             )
         ok = await services.try_publish_note(
             payload.content,
             e_tags=payload.e_tags,
             p_tags=payload.p_tags,
             reply_relay=payload.reply_relay,
-            private_key=stored_key,
+            wallet_id=bunker_wid,
         )
         if not ok:
             raise HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST, 
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail="Failed to publish note"
             )
         return {"published": True}
@@ -197,11 +197,11 @@ async def api_publish_template(
     if not template:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Template not found")
 
-    stored_key = await crud.get_user_setting(wallet_info.wallet.user, "nostr_private_key")
-    if not stored_key:
+    bunker_wid = await services.find_bunker_wallet(wallet_info.wallet.user)
+    if not bunker_wid:
         raise HTTPException(
             status_code=HTTPStatus.BAD_REQUEST,
-            detail="No stored Nostr private key configured",
+            detail="No nsecbunker key configured",
         )
 
     try:
@@ -210,7 +210,7 @@ async def api_publish_template(
             e_tags=payload.e_tags,
             p_tags=payload.p_tags,
             reply_relay=payload.reply_relay,
-            private_key=stored_key,
+            wallet_id=bunker_wid,
         )
         if not ok:
             raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Failed to publish note")
@@ -232,11 +232,11 @@ async def api_publish_template_with_values(
     # Check if extension is enabled for user
     await check_extension_enabled(wallet_info.wallet.user)
     try:
-        stored_key = await crud.get_user_setting(wallet_info.wallet.user, "nostr_private_key")
-        if not stored_key and not payload.return_websocket_message:
+        bunker_wid = await services.find_bunker_wallet(wallet_info.wallet.user)
+        if not bunker_wid and not payload.return_websocket_message:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
-                detail="No stored Nostr private key configured",
+                detail="No nsecbunker key configured",
             )
         result = await services.render_and_publish_template(
             user_id=wallet_info.wallet.user,
@@ -246,10 +246,10 @@ async def api_publish_template_with_values(
             e_tags=payload.e_tags,
             p_tags=payload.p_tags,
             reply_relay=payload.reply_relay,
-            private_key=stored_key,
             reply_to_30311_event=payload.reply_to_30311_event,
             reply_to_30311_a_tag=payload.reply_to_30311_a_tag,
             return_websocket_message=payload.return_websocket_message,
+            wallet_id=bunker_wid or wallet_info.wallet.id,
         )
 
         if payload.return_websocket_message:
@@ -735,8 +735,6 @@ async def api_import_file(
 # Settings endpoints
 class SettingsPayload(BaseModel):
     nostr_publishing_enabled: Optional[bool] = None
-    nostr_private_key: Optional[str] = None
-    clear_private_key: Optional[bool] = None
 
 
 @cyberherd_messaging_api_router.get(
@@ -751,14 +749,24 @@ async def api_get_settings(api_key: Optional[str] = Security(api_key_header)):
     """
     val = await crud.get_setting("nostr_publishing_enabled")
     enabled = True if val is None else (str(val) not in ("0", "false", "False", "no", "off"))
-    # Indicate whether a per-user key is set when admin key is provided
-    nostr_key_set = False
+    bunker = {"installed": False, "has_key": False, "pubkey": None, "has_permissions": False}
     if api_key:
         wallet = await get_wallet_for_key(api_key)
         if wallet:
-            user_key = await crud.get_user_setting(wallet.user, "nostr_private_key")
-            nostr_key_set = bool(user_key)
-    return {"nostr_publishing_enabled": enabled, "nostr_private_key_set": nostr_key_set}
+            # Check all user wallets for bunker key (the key may be on a
+            # different wallet, e.g. the herd_wallet configured in cyberherd)
+            user_wallets = await get_wallets(wallet.user)
+            for uw in user_wallets:
+                status = await services.check_bunker_status(uw.id)
+                if status.get("has_key"):
+                    bunker = status
+                    break
+                if status.get("installed") and not bunker.get("installed"):
+                    bunker = status
+    return {
+        "nostr_publishing_enabled": enabled,
+        "bunker": bunker,
+    }
 
 
 @cyberherd_messaging_api_router.put(
@@ -786,18 +794,6 @@ async def api_update_settings(
             "nostr_publishing_enabled", "1" if payload.nostr_publishing_enabled else "0"
         )
 
-    # Handle per-user private key set/clear
-    if payload.clear_private_key:
-        await crud.delete_user_setting(wallet_info.wallet.user, "nostr_private_key")
-    elif payload.nostr_private_key:
-        # Normalize and store sanitized hex
-        from . import services as _services
-        hex_key, key_len, key_err = _services._prepare_private_key(payload.nostr_private_key)  # type: ignore[attr-defined]
-        if key_err or not hex_key:
-            raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=f"Invalid Nostr private key ({key_err or 'invalid'})")
-        await crud.set_user_setting(wallet_info.wallet.user, "nostr_private_key", hex_key)
-
-    # Return settings including key presence for this user
     return await api_get_settings(wallet_info.wallet.adminkey)
 
 __all__ = ["cyberherd_messaging_api_router"]

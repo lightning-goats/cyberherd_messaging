@@ -95,6 +95,146 @@ async def _is_nostrclient_available() -> bool:
         return _nostrclient_available
 
 
+async def _try_bunker_sign_and_publish(
+    wallet_id: str | None,
+    content: str,
+    kind: int,
+    tags: list[list[str]],
+) -> bool:
+    """Sign an event via nsecbunker and publish to relays.
+
+    Returns True on success, False if bunker is unavailable, has no key,
+    lacks permission, or is rate-limited.
+    """
+    if not wallet_id:
+        return False
+
+    try:
+        from lnbits.extensions.nsecbunker.services import sign_event
+    except ImportError:
+        logger.debug("cyberherd_messaging: nsecbunker not installed, skipping bunker signing")
+        return False
+
+    try:
+        signed = await sign_event(
+            wallet_id,
+            "cyberherd_messaging",
+            {"kind": kind, "tags": tags, "content": content},
+        )
+    except LookupError as exc:
+        logger.info("cyberherd_messaging: bunker LookupError for wallet {}: {}", wallet_id[:12], exc)
+        return False
+    except PermissionError as exc:
+        logger.info("cyberherd_messaging: bunker PermissionError: {}", exc)
+        return False
+    except Exception as exc:
+        logger.warning("cyberherd_messaging: bunker sign_event error ({}): {}", type(exc).__name__, exc)
+        return False
+
+    # Publish the signed event dict via nostrclient relay_manager
+    try:
+        from lnbits.extensions.nostrclient.router import nostr_client
+
+        if not hasattr(nostr_client, "relay_manager"):
+            logger.warning("cyberherd_messaging: nostr_client has no relay_manager (bunker path)")
+            return False
+
+        wire_msg = json.dumps(["EVENT", signed])
+        nostr_client.relay_manager.publish_message(wire_msg)
+
+        event_id = signed.get("id", "")[:8]
+        logger.info(
+            "cyberherd_messaging: published kind {} event {}... via bunker to {} relays",
+            kind,
+            event_id,
+            len(nostr_client.relay_manager.relays),
+        )
+        return True
+    except Exception as exc:
+        logger.error("cyberherd_messaging: bunker publish failed: {}", exc)
+        return False
+
+
+async def get_bunker_pubkey(wallet_id: str | None) -> str | None:
+    """Return the bunker public key hex for a wallet, or None."""
+    if not wallet_id:
+        return None
+    try:
+        from lnbits.extensions.nsecbunker.services import get_wallet_pubkey
+
+        return await get_wallet_pubkey(wallet_id)
+    except ImportError:
+        return None
+    except Exception:
+        return None
+
+
+async def check_bunker_status(wallet_id: str | None) -> dict:
+    """Check nsecbunker availability and configuration for a wallet.
+
+    Returns a dict with keys: installed, has_key, pubkey, has_permissions.
+    """
+    result = {"installed": False, "has_key": False, "pubkey": None, "has_permissions": False}
+    if not wallet_id:
+        return result
+
+    try:
+        from lnbits.extensions.nsecbunker.services import get_wallet_pubkey
+    except ImportError:
+        return result
+
+    result["installed"] = True
+
+    try:
+        pubkey = await get_wallet_pubkey(wallet_id)
+    except Exception:
+        pubkey = None
+
+    if pubkey:
+        result["has_key"] = True
+        result["pubkey"] = pubkey
+    else:
+        return result
+
+    # Check permissions for cyberherd_messaging (kind 1 and kind 1311)
+    try:
+        from lnbits.extensions.nsecbunker.crud import get_permission_for_signing
+
+        perm_1 = await get_permission_for_signing(wallet_id, "cyberherd_messaging", 1)
+        perm_1311 = await get_permission_for_signing(wallet_id, "cyberherd_messaging", 1311)
+        result["has_permissions"] = bool(perm_1 or perm_1311)
+    except Exception:
+        result["has_permissions"] = False
+
+    return result
+
+
+async def find_bunker_wallet(user_id: str) -> str | None:
+    """Return the first wallet_id for *user_id* that has an nsecbunker key.
+
+    Returns None if nsecbunker is not installed or no wallet has a key.
+    """
+    try:
+        from lnbits.core.crud import get_wallets
+        from lnbits.extensions.nsecbunker.services import get_wallet_pubkey
+    except ImportError:
+        return None
+
+    try:
+        wallets = await get_wallets(user_id)
+    except Exception:
+        return None
+
+    for w in wallets:
+        try:
+            pubkey = await get_wallet_pubkey(w.id)
+            if pubkey:
+                return w.id
+        except Exception:
+            continue
+    return None
+
+
 async def send_to_websocket_clients(topic: str, message: dict) -> bool:
     """Broadcast a message to all WebSocket clients subscribed to a topic.
     
@@ -148,10 +288,10 @@ async def is_nostr_publishing_enabled() -> bool:
             
             # Check for disabled states: 0, false, no, off
             if normalized in ("0", "false", "no", "off", ""):
-                logger.info("cyberherd_messaging: nostr publishing disabled by setting (nostr_publishing_enabled=%s)", normalized)
+                logger.info("cyberherd_messaging: nostr publishing disabled by setting (nostr_publishing_enabled={})", normalized)
                 return False
             
-            logger.debug("cyberherd_messaging: nostr publishing enabled by setting (nostr_publishing_enabled=%s)", normalized)
+            logger.debug("cyberherd_messaging: nostr publishing enabled by setting (nostr_publishing_enabled={})", normalized)
         else:
             # Missing DB row = enabled (backward compatible default)
             logger.debug("cyberherd_messaging: nostr_publishing_enabled setting not found, defaulting to enabled")
@@ -167,120 +307,22 @@ async def is_nostr_publishing_enabled() -> bool:
     return await _is_nostrclient_available()
 
 
-def _prepare_private_key(raw_value: str | None) -> tuple[str | None, int, Exception | None]:
-    """Normalize private key material and return (hex_key, length, error)."""
-    if not raw_value:
-        return None, 0, None
-
-    candidate = (raw_value or "").strip()
-    candidate = "".join(candidate.split())  # drop whitespace/newlines
-
-    try:
-        from lnbits.utils.nostr import normalize_private_key
-
-        normalized = normalize_private_key(candidate)
-    except Exception as exc:
-        return None, 0, exc
-
-    if not normalized:
-        return None, 0, ValueError("normalize_private_key returned empty value")
-
-    if normalized.startswith("0x"):
-        normalized = normalized[2:]
-
-    hex_only = "".join(ch for ch in normalized if ch in string.hexdigits).lower()
-    sanitized_len = len(hex_only)
-
-    if sanitized_len >= 64:
-        return hex_only[:64], sanitized_len, None
-
-    return None, sanitized_len, ValueError(f"invalid length {sanitized_len}")
-
-
-async def create_and_sign_event(
-    content: str,
-    private_key: Any,
-    tags: list[tuple[str, ...]] | None = None,
-) -> Any:
-    """Create and sign a Nostr event using nostrclient components.
-
-    Args:
-        content: The message content
-        private_key: PrivateKey object or hex string
-        tags: Optional list of tags
-
-    Returns:
-        Signed Event object
-    """
-    try:
-        from lnbits.extensions.nostrclient.nostr.event import Event
-        from lnbits.extensions.nostrclient.nostr.key import PrivateKey
-    except ImportError as e:
-        raise RuntimeError(f"nostrclient components unavailable: {e}")
-
-    # Convert to PrivateKey object if needed
-    if isinstance(private_key, str):
-        try:
-            privkey_obj = PrivateKey(bytes.fromhex(private_key))
-        except Exception as e:
-            raise ValueError(f"Invalid private key hex: {e}")
-    else:
-        privkey_obj = private_key
-
-    pubkey = privkey_obj.public_key.hex()
-
-    # Use kind 1311 for 30311 replies, kind 1 for regular posts
-    has_30311_tags = any(
-        isinstance(tag, (list, tuple))
-        and len(tag) >= 2
-        and tag[0] == "a"
-        and str(tag[1]).startswith("30311:")
-        for tag in (tags or [])
-    )
-    kind = 1311 if has_30311_tags else 1
-
-    # Create the event
-    formatted_tags = []
-    for tag in tags or []:
-        if isinstance(tag, (list, tuple)):
-            formatted_tags.append([str(part) for part in tag])
-        else:
-            formatted_tags.append([str(tag)])
-
-    evt = Event(
-        content=content,
-        public_key=pubkey,
-        kind=kind,
-        tags=formatted_tags,
-    )
-    
-    # Sign the event (sets evt.signature)
-    privkey_obj.sign_event(evt)
-    
-    logger.debug(
-        f"cyberherd_messaging: created and signed kind {kind} event {evt.id[:8]}... "
-        f"with {len(tags or [])} tags"
-    )
-    
-    return evt
-
-
-
 async def publish_note(
     content: str,
     *,
     tags: list[tuple[str, str]] | None = None,
     e_tags: list[str] | None = None,
     p_tags: list[str] | None = None,
-    private_key_hex: str | None = None,
     reply_to_30311_event: str | None = None,
     reply_to_30311_a_tag: str | None = None,
     reply_relay: str | None = None,
+    wallet_id: str,
 ) -> bool:
-    """Publish a nostr note via in-process nostrclient only.
+    """Publish a nostr note via nsecbunker signing only.
 
-    - Requires private_key_hex to sign locally.
+    - Signs the event via nsecbunker using the provided wallet_id.
     - Supports e_tags (reply threading), p_tags (mentions), and arbitrary tags.
+    - Returns False if bunker signing fails (no local-key fallback).
     """
     enabled = await is_nostr_publishing_enabled()
     if not enabled:
@@ -372,66 +414,32 @@ async def publish_note(
         if candidate:
             _add_tag(("a", candidate))
 
-    priv_len = len(private_key_hex) if isinstance(private_key_hex, str) else 0
-    logger.debug(
-        f"cyberherd_messaging: publish_note content_len={len(content or '')} "
-        f"e_tags={len(e_tags or [])} p_tags={len(p_tags or [])} private_key_len={priv_len}"
+    # --- Sign via nsecbunker and publish ---
+    formatted_tags = []
+    for tag in all_tags:
+        if isinstance(tag, (list, tuple)):
+            formatted_tags.append([str(part) for part in tag])
+        else:
+            formatted_tags.append([str(tag)])
+
+    # Determine kind from tags
+    has_30311_tags = any(
+        len(tag) >= 2 and tag[0] == "a" and str(tag[1]).startswith("30311:")
+        for tag in formatted_tags
     )
+    kind = 1311 if has_30311_tags else 1
 
-    sanitized_key = private_key_hex
-    sanitized_len = priv_len
-    if private_key_hex and priv_len != 64:
-        sanitized_key, sanitized_len, sanitize_err = _prepare_private_key(private_key_hex)
-        if sanitize_err:
-            logger.info(
-                f"cyberherd_messaging: skipping note publish because signing failed ({sanitize_err})"
-            )
-            return False
-        logger.debug(
-            f"cyberherd_messaging: sanitized private key len={sanitized_len}"
-        )
-
-    if not sanitized_key:
-        logger.warning("publish_note called without private_key_hex; skipping")
-        return False
-
-    try:
-        signed_event = await create_and_sign_event(content, sanitized_key, all_tags)
-    except Exception as exc:
-        logger.error(
-            f"cyberherd_messaging: failed to create/sign event: {type(exc).__name__}: {exc}"
-        )
-        return False
-
-    try:
-        from lnbits.extensions.nostrclient.router import nostr_client
-
-        if not hasattr(nostr_client, 'relay_manager'):
-            logger.warning("cyberherd_messaging: nostr_client has no relay_manager")
-            return False
-            
-        # Convert Event object to message format and publish
-        event_message = signed_event.to_message()
-        nostr_client.relay_manager.publish_message(event_message)
-        
-        logger.info(
-            f"cyberherd_messaging: ✅ published kind {signed_event.kind} event "
-            f"{signed_event.id[:8]}... to {len(nostr_client.relay_manager.relays)} relays"
-        )
-        logger.debug(
-            "publish_note success details: content=%s e_tags=%s p_tags=%s tags=%s",
-            content[:200] if content else None,
-            e_tags,
-            p_tags,
-            all_tags,
-        )
+    bunker_ok = await _try_bunker_sign_and_publish(
+        wallet_id, content, kind, formatted_tags
+    )
+    if bunker_ok:
         return True
-        
-    except Exception as e:
-        logger.error(
-            f"cyberherd_messaging: ❌ nostrclient publish failed: {type(e).__name__}: {e}"
-        )
-        return False
+
+    logger.warning(
+        "cyberherd_messaging: bunker signing failed for wallet {}, no fallback available",
+        wallet_id[:12] if wallet_id else "?",
+    )
+    return False
 
 
 async def try_publish_note(
@@ -439,29 +447,21 @@ async def try_publish_note(
     *,
     e_tags: list[str] | None = None,
     p_tags: list[str] | None = None,
-    private_key: str | None = None,
     reply_relay: str | None = None,
+    wallet_id: str,
 ) -> bool:
-    """Alias for publish_note with different parameter naming."""
-    key_hex, key_len, key_error = _prepare_private_key(private_key)
-
+    """Convenience wrapper around publish_note."""
     logger.info(
         f"cyberherd_messaging: try_publish_note content_len={len(content or '')} "
-        f"e_tags={e_tags} p_tags={p_tags} private_key_len={key_len}"
+        f"e_tags={e_tags} p_tags={p_tags} wallet_id={wallet_id[:12] if wallet_id else '?'}"
     )
-
-    if key_error:
-        logger.info(
-            f"cyberherd_messaging: skipping note publish because signing failed ({key_error})"
-        )
-        return False
 
     return await publish_note(
         content,
         e_tags=e_tags,
         p_tags=p_tags,
-        private_key_hex=key_hex,
         reply_relay=reply_relay,
+        wallet_id=wallet_id,
     )
 
 
@@ -614,7 +614,7 @@ async def _augment_membership_rendered_content(
             return (base_content or "") + extras, bundle
         return base_content, bundle
     except Exception as exc:
-        logger.debug("cyberherd_messaging: failed to augment membership message: %s", exc)
+        logger.debug("cyberherd_messaging: failed to augment membership message: {}", exc)
         return base_content, None
 
 
@@ -626,11 +626,11 @@ async def render_and_publish_template(
     values: dict[str, Any] | None = None,
     e_tags: list[str] | None = None,
     p_tags: list[str] | None = None,
-    private_key: str | None = None,
     reply_to_30311_event: str | None = None,
     reply_to_30311_a_tag: str | None = None,
     reply_relay: str | None = None,
     return_websocket_message: bool = False,
+    wallet_id: str,
 ):
     """Render a template with values and publish as nostr note, or return for websocket.
 
@@ -886,10 +886,10 @@ async def render_and_publish_template(
         rendered_content,
         e_tags=e_tags,
         p_tags=combined_p_tags,
-        private_key_hex=private_key,
         reply_to_30311_event=reply_to_30311_event,
         reply_to_30311_a_tag=reply_to_30311_a_tag,
         reply_relay=effective_reply_relay,
+        wallet_id=wallet_id,
     )
 
 
@@ -987,6 +987,8 @@ __all__ = [
     "publish_note",
     "try_publish_note",
     "render_and_publish_template",
-    "create_and_sign_event",
     "build_message_bundle",
+    "check_bunker_status",
+    "get_bunker_pubkey",
+    "find_bunker_wallet",
 ]

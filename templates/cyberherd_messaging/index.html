@@ -31,25 +31,19 @@
               @update:model-value="updateSettings"
             />
           </div>
-          <div class="col-auto">
-            <q-badge :color="nostrPrivateKeySet ? 'green' : 'grey'" align="middle">
-              {{ nostrPrivateKeySet ? 'Nostr key: SET' : 'Nostr key: NOT SET' }}
+          <div class="col-auto" v-if="bunkerStatus.installed">
+            <q-badge
+              :color="bunkerActive ? 'blue' : (bunkerStatus.has_key ? 'orange' : 'grey')"
+              align="middle"
+            >
+              {{ bunkerActive ? 'Bunker: ACTIVE' : (bunkerStatus.has_key ? 'Bunker: NO PERMS' : 'Bunker: NO KEY') }}
             </q-badge>
           </div>
-          <div class="col-grow" style="max-width: 320px;">
-            <q-input
-              v-model="nostrPrivateKeyInput"
-              type="password"
-              label="Nostr private key (nsec or hex)"
-              filled
-              dense
-            />
+          <div class="col-auto" v-if="bunkerActive">
+            <span class="text-caption text-blue">Signing handled by nsecbunker</span>
           </div>
-          <div class="col-auto">
-            <q-btn color="primary" label="Save Key" @click="savePrivateKey" :disable="!nostrPrivateKeyInput" />
-          </div>
-          <div class="col-auto">
-            <q-btn color="negative" outline label="Clear Key" @click="clearPrivateKey" :disable="!nostrPrivateKeySet" />
+          <div class="col-auto" v-if="!bunkerActive">
+            <span class="text-caption text-grey">Configure nsecbunker to enable signing</span>
           </div>
           <div class="col-auto">
             <q-btn color="secondary" outline label="Export JSON" @click="exportJson" />
@@ -259,8 +253,7 @@
         selectedCategory: null,
         uploadFile: null,
         nostrPublishingEnabled: true,
-        nostrPrivateKeySet: false,
-        nostrPrivateKeyInput: '',
+        bunkerStatus: { installed: false, has_key: false, pubkey: null, has_permissions: false },
         showEditTemplateDialog: false,
         showNewTemplateDialog: false,
         showRenameCategoryDialog: false,
@@ -275,6 +268,9 @@
       }
     },
     computed: {
+      bunkerActive() {
+        return this.bunkerStatus.installed && this.bunkerStatus.has_key && this.bunkerStatus.has_permissions
+      },
       filteredTemplates() {
         const templates = !this.selectedCategory 
           ? this.templates 
@@ -355,8 +351,8 @@
           if (typeof response.data.nostr_publishing_enabled === 'boolean') {
             this.nostrPublishingEnabled = response.data.nostr_publishing_enabled
           }
-          if (typeof response.data.nostr_private_key_set === 'boolean') {
-            this.nostrPrivateKeySet = response.data.nostr_private_key_set
+          if (response.data.bunker) {
+            this.bunkerStatus = response.data.bunker
           }
         } catch (e) {
           console.error('Failed to load settings', e)
@@ -368,26 +364,6 @@
         } catch (e) {
           console.error('Failed to update settings', e)
         }
-      },
-      async savePrivateKey() {
-        if (!this.nostrPrivateKeyInput) return
-        try {
-          const res = await LNbits.api.request('PUT', '/cyberherd_messaging/api/v1/settings', this.g.user.wallets[0].adminkey, { nostr_private_key: this.nostrPrivateKeyInput })
-          if (res.status && res.status >= 400) {
-            throw new Error('Failed to save key')
-          }
-          this.nostrPrivateKeyInput = ''
-          await this.loadSettings()
-          this.$q && this.$q.notify && this.$q.notify({ type: 'positive', message: 'Nostr key saved.' })
-        } catch (e) { console.error('Failed to save key', e) }
-      },
-      async clearPrivateKey() {
-        if (!confirm('Clear your stored Nostr private key?')) return
-        try {
-          await LNbits.api.request('PUT', '/cyberherd_messaging/api/v1/settings', this.g.user.wallets[0].adminkey, { clear_private_key: true })
-          await this.loadSettings()
-          this.$q && this.$q.notify && this.$q.notify({ type: 'warning', message: 'Nostr key cleared.' })
-        } catch (e) { console.error('Failed to clear key', e) }
       },
       getNextKeyForCategory(category) {
         // Find all numeric keys in the selected category
