@@ -3,9 +3,8 @@ import json
 import string
 import ast
 import re
-from typing import Tuple, Optional
+from typing import Any, Optional, Tuple
 from loguru import logger
-from typing import Any, Optional
 
 from .message_builder import MessageBundle, build_message as _build_message, validate_pubkey_hex
 from .utils import get_random_goat_names, join_with_and
@@ -83,9 +82,9 @@ async def _is_nostrclient_available() -> bool:
             return _nostrclient_available
 
         try:
-            from lnbits.extensions.nostrclient.router import nostr_client  # type: ignore  # noqa: F401
+            from lnbits.extensions.nostrclient.router import nostr_client  # type: ignore
 
-            _nostrclient_available = True
+            _nostrclient_available = nostr_client is not None
         except Exception as exc:  # pragma: no cover - optional dependency path
             _nostrclient_available = False
             logger.warning(
@@ -262,7 +261,7 @@ async def send_to_websocket_clients(topic: str, message: dict) -> bool:
         return False
 
 
-async def is_nostr_publishing_enabled() -> bool:
+async def is_nostr_publishing_enabled(user_id: str | None = None) -> bool:
     """Return True if nostr publishing is enabled and available.
 
     Checks two conditions:
@@ -280,7 +279,12 @@ async def is_nostr_publishing_enabled() -> bool:
         # Lazy import to avoid circular dependency
         from . import crud
         
-        setting_value = await crud.get_setting("nostr_publishing_enabled")
+        if user_id:
+            setting_value = await crud.get_user_setting(
+                user_id, "nostr_publishing_enabled"
+            )
+        else:
+            setting_value = await crud.get_setting("nostr_publishing_enabled")
         
         if setting_value is not None:
             # Normalize the value (trim whitespace, lowercase)
@@ -316,6 +320,7 @@ async def publish_note(
     reply_to_30311_event: str | None = None,
     reply_to_30311_a_tag: str | None = None,
     reply_relay: str | None = None,
+    user_id: str | None = None,
     wallet_id: str,
 ) -> bool:
     """Publish a nostr note via nsecbunker signing only.
@@ -324,7 +329,7 @@ async def publish_note(
     - Supports e_tags (reply threading), p_tags (mentions), and arbitrary tags.
     - Returns False if bunker signing fails (no local-key fallback).
     """
-    enabled = await is_nostr_publishing_enabled()
+    enabled = await is_nostr_publishing_enabled(user_id)
     if not enabled:
         return True
 
@@ -376,14 +381,10 @@ async def publish_note(
     for p_id in normalized_p_ids:
         if not p_id:
             continue
-        # Import validation function
-        from .message_builder import validate_pubkey_hex
         if validate_pubkey_hex(p_id):
             validated_p_ids.append(p_id.strip().lower())
         else:
             logger.debug(f"Invalid pubkey in p_tags, skipping: {p_id[:20] if len(p_id) > 20 else p_id}")
-    
-    has_reply_context = bool(reply_to_30311_event or e_tags)
 
     if normalized_e_ids:
         relay_hint = normalized_reply or ""
@@ -448,6 +449,7 @@ async def try_publish_note(
     e_tags: list[str] | None = None,
     p_tags: list[str] | None = None,
     reply_relay: str | None = None,
+    user_id: str | None = None,
     wallet_id: str,
 ) -> bool:
     """Convenience wrapper around publish_note."""
@@ -461,6 +463,7 @@ async def try_publish_note(
         e_tags=e_tags,
         p_tags=p_tags,
         reply_relay=reply_relay,
+        user_id=user_id,
         wallet_id=wallet_id,
     )
 
@@ -823,7 +826,7 @@ async def render_and_publish_template(
         # Try to load template overrides for this user so the builder prefers DB templates
         template_overrides = {}
         try:
-            template_overrides = await _load_template_overrides(values.get("user_id") or values.get("owner_id") or None)
+            template_overrides = await _load_template_overrides(user_id)
         except Exception:
             template_overrides = {}
 
@@ -889,6 +892,7 @@ async def render_and_publish_template(
         reply_to_30311_event=reply_to_30311_event,
         reply_to_30311_a_tag=reply_to_30311_a_tag,
         reply_relay=effective_reply_relay,
+        user_id=user_id,
         wallet_id=wallet_id,
     )
 
@@ -903,11 +907,10 @@ async def _load_template_overrides(user_id: Optional[str]) -> dict[str, dict[str
     from . import crud
 
     try:
-        # Global templates first
-        global_rows = await crud.get_message_templates(None, None)
-        user_rows: list[Any] = []
-        if user_id:
-            user_rows = await crud.get_message_templates(user_id, None)
+        if not user_id:
+            return {}
+
+        user_rows = await crud.get_message_templates(user_id, None)
 
         combined: dict[str, dict[str, Any]] = {}
 
@@ -936,10 +939,7 @@ async def _load_template_overrides(user_id: Optional[str]) -> dict[str, dict[str
                         parsed = s
             combined[cat][row.key] = parsed
 
-        for r in global_rows:
-            _assign(r)
         for r in user_rows:
-            # user overrides take precedence
             _assign(r)
 
         return combined

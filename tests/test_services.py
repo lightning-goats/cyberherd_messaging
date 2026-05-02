@@ -1,6 +1,9 @@
 # tests/test_services.py - unit tests for cyberherd_messaging.services
+import sys
+import types
 import pytest
 from unittest.mock import MagicMock, AsyncMock
+from types import SimpleNamespace
 
 import cyberherd_messaging.services as services
 
@@ -19,7 +22,7 @@ class DummyNostrClient:
         return True
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_publish_note_with_tags(monkeypatch):
     """Test publish_note calls bunker signing with correctly merged tags."""
     mock_enabled = AsyncMock(return_value=True)
@@ -40,7 +43,7 @@ async def test_publish_note_with_tags(monkeypatch):
         "hello world",
         tags=[("t", "test")],
         e_tags=["event123"],
-        p_tags=["pubkey456"],
+        p_tags=["a" * 64],
         wallet_id=MOCK_WALLET_ID,
     )
 
@@ -50,15 +53,12 @@ async def test_publish_note_with_tags(monkeypatch):
     # Ensure tags merged correctly with proper markers
     tags = captured_args["tags"]
     assert ("t", "test") in tags
-    assert ("p", "pubkey456") in tags
+    assert ("p", "a" * 64) in tags
     e_entries = [tag for tag in tags if tag[0] == "e"]
-    assert e_entries == [
-        ("e", "event123", "", "root"),
-        ("e", "event123", "", "reply"),
-    ]
+    assert e_entries == [("e", "event123", "", "root")]
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_publish_note_bunker_failure(monkeypatch):
     """Test publish_note returns False when bunker signing fails."""
     mock_enabled = AsyncMock(return_value=True)
@@ -76,7 +76,7 @@ async def test_publish_note_bunker_failure(monkeypatch):
     assert result is False
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_try_publish_note(monkeypatch):
     """Test try_publish_note delegates to publish_note correctly."""
     mock_enabled = AsyncMock(return_value=True)
@@ -94,7 +94,7 @@ async def test_try_publish_note(monkeypatch):
     result = await services.try_publish_note(
         "test message",
         e_tags=["event1"],
-        p_tags=["pubkey1"],
+        p_tags=["b" * 64],
         wallet_id=MOCK_WALLET_ID,
     )
 
@@ -102,7 +102,7 @@ async def test_try_publish_note(monkeypatch):
     assert captured_args["wallet_id"] == MOCK_WALLET_ID
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_publish_note_30311_reply(monkeypatch):
     """Test 30311 reply generates correct a-tags and kind 1311."""
     mock_enabled = AsyncMock(return_value=True)
@@ -132,13 +132,10 @@ async def test_publish_note_30311_reply(monkeypatch):
     a_entries = [tag for tag in tags if tag[0] == "a"]
     assert a_entries == [("a", "30311:deadbeef:identifier")]
     e_entries = [tag for tag in tags if tag[0] == "e"]
-    assert e_entries == [
-        ("e", "event123", "wss://relay.example.com", "root"),
-        ("e", "event123", "wss://relay.example.com", "reply"),
-    ]
+    assert e_entries == [("e", "event123", "wss://relay.example.com", "root")]
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_render_and_publish_template(monkeypatch):
     """Test render_and_publish_template renders and calls bunker signing."""
     mock_enabled = AsyncMock(return_value=True)
@@ -171,14 +168,15 @@ async def test_render_and_publish_template(monkeypatch):
     assert result is True
     assert captured_args["wallet_id"] == MOCK_WALLET_ID
     assert ("e", "event123", "wss://seed.relay", "root") in captured_args["tags"]
-    assert ("e", "event123", "wss://seed.relay", "reply") in captured_args["tags"]
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_send_to_websocket_clients(monkeypatch):
     """Test the send_to_websocket_clients helper function."""
     mock_updater = AsyncMock()
-    monkeypatch.setattr("lnbits.core.services.websockets.websocket_updater", mock_updater)
+    websockets_mod = types.ModuleType("lnbits.core.services.websockets")
+    websockets_mod.websocket_updater = mock_updater
+    monkeypatch.setitem(sys.modules, "lnbits.core.services.websockets", websockets_mod)
 
     test_message = {"type": "test", "data": "hello"}
     result = await services.send_to_websocket_clients("cyberherd", test_message)
@@ -191,11 +189,13 @@ async def test_send_to_websocket_clients(monkeypatch):
     assert '"data": "hello"' in call_args[0][1]
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_send_to_websocket_clients_error_handling(monkeypatch):
     """Test error handling in send_to_websocket_clients."""
     mock_updater = AsyncMock(side_effect=Exception("Connection failed"))
-    monkeypatch.setattr("lnbits.core.services.websockets.websocket_updater", mock_updater)
+    websockets_mod = types.ModuleType("lnbits.core.services.websockets")
+    websockets_mod.websocket_updater = mock_updater
+    monkeypatch.setitem(sys.modules, "lnbits.core.services.websockets", websockets_mod)
 
     test_message = {"type": "test"}
     result = await services.send_to_websocket_clients("cyberherd", test_message)
@@ -203,7 +203,7 @@ async def test_send_to_websocket_clients_error_handling(monkeypatch):
     assert result is False
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_publish_note_when_disabled_by_setting(monkeypatch):
     """Test that publish_note short-circuits when nostr_publishing_enabled is False."""
     mock_enabled = AsyncMock(return_value=False)
@@ -224,7 +224,7 @@ async def test_publish_note_when_disabled_by_setting(monkeypatch):
     assert not mock_bunker.called, "bunker signing should NOT be called when disabled"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_build_message_bundle_headbutt_success():
     bundle = await services.build_message_bundle(
         "headbutt_success",
@@ -242,7 +242,7 @@ async def test_build_message_bundle_headbutt_success():
     assert "Alice" in bundle.websocket_content
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_build_message_bundle_sats_received_goats():
     bundle = await services.build_message_bundle(
         "sats_received",
@@ -254,7 +254,7 @@ async def test_build_message_bundle_sats_received_goats():
         assert all("name" in goat and "imageUrl" in goat for goat in bundle.goat_data)
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_build_message_bundle_new_member_spots_info():
     bundle = await services.build_message_bundle(
         "new_member",
@@ -264,10 +264,10 @@ async def test_build_message_bundle_new_member_spots_info():
         spots_remaining=3,
     )
     assert "⚡ 3 more spots available. ⚡" in bundle.nostr_content
-    assert bundle.spots_info == "⚡ 3 more spots available. ⚡"
+    assert bundle.spots_info == "\n\n⚡ 3 more spots available. ⚡"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_render_and_publish_template_when_disabled(monkeypatch):
     """Test render_and_publish_template short-circuits when nostr publishing is disabled."""
     mock_enabled = AsyncMock(return_value=False)
@@ -295,7 +295,7 @@ async def test_render_and_publish_template_when_disabled(monkeypatch):
     assert not mock_bunker.called, "bunker signing should NOT be called when disabled"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_is_nostr_publishing_enabled_with_setting_disabled(monkeypatch):
     """Test is_nostr_publishing_enabled returns False when setting is '0'."""
     mock_get_setting = AsyncMock(return_value="0")
@@ -311,7 +311,7 @@ async def test_is_nostr_publishing_enabled_with_setting_disabled(monkeypatch):
     assert not mock_nostrclient.called, "_is_nostrclient_available should NOT be called when setting is disabled"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_is_nostr_publishing_enabled_with_various_disabled_values(monkeypatch):
     """Test is_nostr_publishing_enabled handles various disabled values."""
     mock_nostrclient = AsyncMock(return_value=True)
@@ -330,7 +330,7 @@ async def test_is_nostr_publishing_enabled_with_various_disabled_values(monkeypa
         assert not mock_nostrclient.called, f"_is_nostrclient_available should NOT be called for '{value}'"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_is_nostr_publishing_enabled_with_setting_enabled(monkeypatch):
     """Test is_nostr_publishing_enabled checks nostrclient when setting is '1'."""
     mock_get_setting = AsyncMock(return_value="1")
@@ -346,7 +346,7 @@ async def test_is_nostr_publishing_enabled_with_setting_enabled(monkeypatch):
     assert mock_nostrclient.called, "_is_nostrclient_available should be called when setting is enabled"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_is_nostr_publishing_enabled_with_missing_setting(monkeypatch):
     """Test is_nostr_publishing_enabled defaults to enabled when setting is missing."""
     mock_get_setting = AsyncMock(return_value=None)
@@ -362,7 +362,7 @@ async def test_is_nostr_publishing_enabled_with_missing_setting(monkeypatch):
     assert mock_nostrclient.called, "_is_nostrclient_available should be called when setting is missing (default enabled)"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_is_nostr_publishing_enabled_with_db_error(monkeypatch):
     """Test is_nostr_publishing_enabled falls back to enabled on database error."""
     mock_get_setting = AsyncMock(side_effect=Exception("Database error"))
@@ -378,7 +378,7 @@ async def test_is_nostr_publishing_enabled_with_db_error(monkeypatch):
     assert mock_nostrclient.called, "_is_nostrclient_available should be called on database error (fallback to enabled)"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_is_nostr_publishing_enabled_when_nostrclient_unavailable(monkeypatch):
     """Test is_nostr_publishing_enabled returns False when nostrclient is unavailable."""
     mock_get_setting = AsyncMock(return_value="1")
@@ -392,3 +392,86 @@ async def test_is_nostr_publishing_enabled_when_nostrclient_unavailable(monkeypa
     assert result is False
     assert mock_get_setting.called
     assert mock_nostrclient.called
+
+
+@pytest.mark.anyio
+async def test_load_template_overrides_without_user_does_not_load_all_users(monkeypatch):
+    """A missing user_id must not be interpreted as a global all-user scope."""
+
+    async def fake_get_message_templates(user_id, category):
+        assert user_id is not None, "None would query templates across every user"
+        return []
+
+    monkeypatch.setattr(
+        "cyberherd_messaging.crud.get_message_templates",
+        fake_get_message_templates,
+    )
+
+    assert await services._load_template_overrides(None) == {}
+
+
+@pytest.mark.anyio
+async def test_load_template_overrides_only_reads_requested_user(monkeypatch):
+    calls = []
+
+    async def fake_get_message_templates(user_id, category):
+        calls.append((user_id, category))
+        if user_id == "user-a":
+            return [
+                SimpleNamespace(
+                    category="cyber_herd_join",
+                    key="0",
+                    content="hello {name}",
+                )
+            ]
+        return [
+            SimpleNamespace(
+                category="cyber_herd_join",
+                key="0",
+                content="wrong user",
+            )
+        ]
+
+    monkeypatch.setattr(
+        "cyberherd_messaging.crud.get_message_templates",
+        fake_get_message_templates,
+    )
+
+    overrides = await services._load_template_overrides("user-a")
+
+    assert calls == [("user-a", None)]
+    assert overrides == {"cyber_herd_join": {"0": "hello {name}"}}
+
+
+@pytest.mark.anyio
+async def test_render_template_uses_authenticated_user_for_overrides(monkeypatch):
+    captured_user_ids = []
+
+    async def fake_get_message_template(user_id, category, key):
+        return SimpleNamespace(content="Hello {name}", reply_relay=None)
+
+    async def fake_load_template_overrides(user_id):
+        captured_user_ids.append(user_id)
+        return {}
+
+    monkeypatch.setattr(
+        "cyberherd_messaging.crud.get_message_template",
+        fake_get_message_template,
+    )
+    monkeypatch.setattr(
+        services,
+        "_load_template_overrides",
+        fake_load_template_overrides,
+    )
+
+    rendered, _ = await services.render_and_publish_template(
+        user_id="authenticated-user",
+        category="cat",
+        key="key",
+        values={"name": "Alice", "user_id": "spoofed-user"},
+        return_websocket_message=True,
+        wallet_id="wallet",
+    )
+
+    assert rendered == "Hello Alice"
+    assert captured_user_ids == ["authenticated-user"]

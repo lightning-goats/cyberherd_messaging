@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Securit
 from pydantic import BaseModel
 
 from lnbits.core.models import WalletTypeInfo
-from lnbits.decorators import require_admin_key, api_key_header, optional_user_id
+from lnbits.decorators import require_admin_key, api_key_header
 from lnbits.core.crud import get_wallet_for_key, get_user_active_extensions_ids, get_wallets
 
 from . import crud, services
@@ -122,6 +122,7 @@ async def api_publish_note(
             e_tags=payload.e_tags,
             p_tags=payload.p_tags,
             reply_relay=payload.reply_relay,
+            user_id=wallet_info.wallet.user,
             wallet_id=bunker_wid,
         )
         if not ok:
@@ -210,6 +211,7 @@ async def api_publish_template(
             e_tags=payload.e_tags,
             p_tags=payload.p_tags,
             reply_relay=payload.reply_relay,
+            user_id=wallet_info.wallet.user,
             wallet_id=bunker_wid,
         )
         if not ok:
@@ -279,36 +281,19 @@ async def api_publish_template_with_values(
 @cyberherd_messaging_api_router.get("/api/v1/templates")
 async def api_get_templates(
     category: Optional[str] = None,
-    api_key: Optional[str] = Security(api_key_header),
+    wallet_info: WalletTypeInfo = Depends(require_admin_key),
 ):
-    """Public read endpoint for templates.
+    await check_extension_enabled(wallet_info.wallet.user)
 
-    If an admin API key is provided, results are filtered to that user's templates.
-    Otherwise, return templates across all users.
-    """
-    user_id: Optional[str] = None
-    if api_key:
-        wallet = await get_wallet_for_key(api_key)
-        if wallet:
-            user_id = wallet.user
-
-    templates = await crud.get_message_templates(user_id, category)
+    templates = await crud.get_message_templates(wallet_info.wallet.user, category)
     return {"templates": [(t.model_dump() if hasattr(t, "model_dump") else t.dict()) for t in templates]}
 
 
 @cyberherd_messaging_api_router.get("/api/v1/templates/categories")
-async def api_get_categories(api_key: Optional[str] = Security(api_key_header)):
-    """Public read endpoint for template categories.
+async def api_get_categories(wallet_info: WalletTypeInfo = Depends(require_admin_key)):
+    await check_extension_enabled(wallet_info.wallet.user)
 
-    If an admin API key is provided, categories are limited to that user's templates.
-    """
-    user_id: Optional[str] = None
-    if api_key:
-        wallet = await get_wallet_for_key(api_key)
-        if wallet:
-            user_id = wallet.user
-
-    templates = await crud.get_message_templates(user_id, None)
+    templates = await crud.get_message_templates(wallet_info.wallet.user, None)
     
     # Sort categories numerically if they are numbers, otherwise alphabetically
     def numeric_sort_key(category: str):
@@ -324,7 +309,7 @@ async def api_get_categories(api_key: Optional[str] = Security(api_key_header)):
 @cyberherd_messaging_api_router.get("/api/v1/templates/category/{category}/random")
 async def api_get_random_template(
     category: str,
-    api_key: Optional[str] = Security(api_key_header)
+    wallet_info: WalletTypeInfo = Depends(require_admin_key),
 ):
     """Get a random template from a category.
     
@@ -335,13 +320,9 @@ async def api_get_random_template(
     Returns:
         A randomly selected template from the category
     """
-    user_id: Optional[str] = None
-    if api_key:
-        wallet = await get_wallet_for_key(api_key)
-        if wallet:
-            user_id = wallet.user
+    await check_extension_enabled(wallet_info.wallet.user)
     
-    templates = await crud.get_message_templates(user_id, category)
+    templates = await crud.get_message_templates(wallet_info.wallet.user, category)
     
     if not templates:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=f"No templates found in category '{category}'")
@@ -354,7 +335,7 @@ async def api_get_random_template(
 async def api_get_template(
     category: str,
     key: str,
-    api_key: Optional[str] = Security(api_key_header)
+    wallet_info: WalletTypeInfo = Depends(require_admin_key),
 ):
     """Get a specific template by category and key.
     
@@ -366,18 +347,8 @@ async def api_get_template(
     Returns:
         The requested template
     """
-    user_id: Optional[str] = None
-    if api_key:
-        wallet = await get_wallet_for_key(api_key)
-        if wallet:
-            user_id = wallet.user
-    
-    if user_id:
-        template = await crud.get_message_template(user_id, category, key)
-    else:
-        # For public access, search through all templates
-        templates = await crud.get_message_templates(None, category)
-        template = next((t for t in templates if t.key == key), None)
+    await check_extension_enabled(wallet_info.wallet.user)
+    template = await crud.get_message_template(wallet_info.wallet.user, category, key)
     
     if not template:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Template not found")
@@ -655,8 +626,7 @@ def _normalize_templates_payload(data: Any) -> Dict[str, Dict[str, str]]:
 @cyberherd_messaging_api_router.post("/api/v1/templates/import_file")
 async def api_import_file(
     file: UploadFile = File(...),
-    api_key: Optional[str] = Security(api_key_header),
-    session_user_id: Optional[str] = Depends(optional_user_id),
+    wallet_info: WalletTypeInfo = Depends(require_admin_key),
 ):
     # Limit upload size to 1 MB to prevent resource exhaustion
     _MAX_UPLOAD_BYTES = 1_048_576
@@ -693,21 +663,7 @@ async def api_import_file(
     if not payload:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Unsupported file format. Provide JSON {category: {key: content}} or a Python file with top-level dicts of strings.")
 
-    # Determine the owning user for these templates.
-    # Prefer API key (admin) when provided, otherwise use the logged-in session user.
-    user_id: Optional[str] = None
-    if api_key:
-        wallet = await get_wallet_for_key(api_key)
-        if wallet:
-            user_id = wallet.user
-
-    if not user_id and session_user_id:
-        user_id = session_user_id
-
-    if not user_id:
-        # No authentication provided
-        raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="Missing authentication. Provide an admin API key or log in.")
-
+    user_id = wallet_info.wallet.user
     # Check if extension is enabled for this user
     await check_extension_enabled(user_id)
 
@@ -747,12 +703,13 @@ async def api_get_settings(api_key: Optional[str] = Security(api_key_header)):
     
     Public endpoint - no authentication required for reading settings.
     """
-    val = await crud.get_setting("nostr_publishing_enabled")
-    enabled = True if val is None else (str(val) not in ("0", "false", "False", "no", "off"))
+    enabled = True
     bunker = {"installed": False, "has_key": False, "pubkey": None, "has_permissions": False}
     if api_key:
         wallet = await get_wallet_for_key(api_key)
         if wallet:
+            val = await crud.get_user_setting(wallet.user, "nostr_publishing_enabled")
+            enabled = True if val is None else (str(val).strip().lower() not in ("0", "false", "no", "off", ""))
             # Check all user wallets for bunker key (the key may be on a
             # different wallet, e.g. the herd_wallet configured in cyberherd)
             user_wallets = await get_wallets(wallet.user)
@@ -790,8 +747,10 @@ async def api_update_settings(
     """
     await check_extension_enabled(wallet_info.wallet.user)
     if payload.nostr_publishing_enabled is not None:
-        await crud.set_setting(
-            "nostr_publishing_enabled", "1" if payload.nostr_publishing_enabled else "0"
+        await crud.set_user_setting(
+            wallet_info.wallet.user,
+            "nostr_publishing_enabled",
+            "1" if payload.nostr_publishing_enabled else "0",
         )
 
     return await api_get_settings(wallet_info.wallet.adminkey)
