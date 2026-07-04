@@ -205,9 +205,12 @@ async def test_send_to_websocket_clients_error_handling(monkeypatch):
 
 @pytest.mark.anyio
 async def test_publish_note_when_disabled_by_setting(monkeypatch):
-    """Test that publish_note short-circuits when nostr_publishing_enabled is False."""
+    """Test that publish_note short-circuits (no-op success) when disabled by setting."""
     mock_enabled = AsyncMock(return_value=False)
     monkeypatch.setattr("cyberherd_messaging.services.is_nostr_publishing_enabled", mock_enabled)
+    # Disabled specifically by the setting (not merely unavailable).
+    mock_setting = AsyncMock(return_value=False)
+    monkeypatch.setattr("cyberherd_messaging.services._is_publishing_setting_enabled", mock_setting)
 
     # Mock bunker signing - should NOT be called
     mock_bunker = AsyncMock()
@@ -222,6 +225,27 @@ async def test_publish_note_when_disabled_by_setting(monkeypatch):
     assert result is True
     assert mock_enabled.called, "is_nostr_publishing_enabled should be checked"
     assert not mock_bunker.called, "bunker signing should NOT be called when disabled"
+
+
+@pytest.mark.anyio
+async def test_publish_note_enabled_but_nostrclient_unavailable(monkeypatch):
+    """publish_note must return False (not a masked True) when publishing is
+    enabled by setting but the nostrclient relay client is unavailable."""
+    mock_enabled = AsyncMock(return_value=False)  # combined check: unavailable
+    monkeypatch.setattr("cyberherd_messaging.services.is_nostr_publishing_enabled", mock_enabled)
+    mock_setting = AsyncMock(return_value=True)  # setting says enabled
+    monkeypatch.setattr("cyberherd_messaging.services._is_publishing_setting_enabled", mock_setting)
+
+    mock_bunker = AsyncMock()
+    monkeypatch.setattr("cyberherd_messaging.services._try_bunker_sign_and_publish", mock_bunker)
+
+    result = await services.publish_note(
+        "test message",
+        wallet_id=MOCK_WALLET_ID,
+    )
+
+    assert result is False, "an unavailable relay client must not report success"
+    assert not mock_bunker.called, "bunker signing should not run when unavailable"
 
 
 @pytest.mark.anyio
@@ -269,9 +293,12 @@ async def test_build_message_bundle_new_member_spots_info():
 
 @pytest.mark.anyio
 async def test_render_and_publish_template_when_disabled(monkeypatch):
-    """Test render_and_publish_template short-circuits when nostr publishing is disabled."""
+    """Test render_and_publish_template short-circuits when disabled by setting."""
     mock_enabled = AsyncMock(return_value=False)
     monkeypatch.setattr("cyberherd_messaging.services.is_nostr_publishing_enabled", mock_enabled)
+    # Disabled by the setting (an intentional no-op), not merely unavailable.
+    mock_setting = AsyncMock(return_value=False)
+    monkeypatch.setattr("cyberherd_messaging.services._is_publishing_setting_enabled", mock_setting)
 
     mock_template = type('MockTemplate', (), {'content': 'Hello {name}'})()
     mock_get_template = AsyncMock(return_value=mock_template)

@@ -261,8 +261,48 @@ async def send_to_websocket_clients(topic: str, message: dict) -> bool:
         return False
 
 
+async def _is_publishing_setting_enabled(user_id: str | None = None) -> bool:
+    """Return the nostr_publishing_enabled DB setting only (no availability check).
+
+    Missing database rows are treated as "enabled" (backward compatible default).
+    Database errors fall back to True with a warning.
+    """
+    try:
+        # Lazy import to avoid circular dependency
+        from . import crud
+
+        if user_id:
+            setting_value = await crud.get_user_setting(
+                user_id, "nostr_publishing_enabled"
+            )
+        else:
+            setting_value = await crud.get_setting("nostr_publishing_enabled")
+
+        if setting_value is not None:
+            # Normalize the value (trim whitespace, lowercase)
+            normalized = str(setting_value).strip().lower()
+
+            # Check for disabled states: 0, false, no, off
+            if normalized in ("0", "false", "no", "off", ""):
+                logger.info("cyberherd_messaging: nostr publishing disabled by setting (nostr_publishing_enabled={})", normalized)
+                return False
+
+            logger.debug("cyberherd_messaging: nostr publishing enabled by setting (nostr_publishing_enabled={})", normalized)
+        else:
+            # Missing DB row = enabled (backward compatible default)
+            logger.debug("cyberherd_messaging: nostr_publishing_enabled setting not found, defaulting to enabled")
+
+    except Exception as exc:
+        # Database error - fall back to enabled but warn
+        logger.warning(
+            "cyberherd_messaging: failed to read nostr_publishing_enabled setting, defaulting to enabled (%s)",
+            exc,
+        )
+    return True
+
+
 async def is_nostr_publishing_enabled(user_id: str | None = None) -> bool:
-    """Return True if nostr publishing is enabled and available.
+    """Return True if nostr publishing is both enabled by setting and available.
 
     Checks two conditions:
     1. The nostr_publishing_enabled setting (from database)
@@ -270,44 +310,9 @@ async def is_nostr_publishing_enabled(user_id: str | None = None) -> bool:
 
     If the setting is disabled (0/false/no/off), returns False immediately.
     Otherwise returns the nostrclient availability status.
-    
-    Missing database rows are treated as "enabled" (backward compatible default).
-    Database errors fall back to True with a warning.
     """
-    # Check the database setting first
-    try:
-        # Lazy import to avoid circular dependency
-        from . import crud
-        
-        if user_id:
-            setting_value = await crud.get_user_setting(
-                user_id, "nostr_publishing_enabled"
-            )
-        else:
-            setting_value = await crud.get_setting("nostr_publishing_enabled")
-        
-        if setting_value is not None:
-            # Normalize the value (trim whitespace, lowercase)
-            normalized = str(setting_value).strip().lower()
-            
-            # Check for disabled states: 0, false, no, off
-            if normalized in ("0", "false", "no", "off", ""):
-                logger.info("cyberherd_messaging: nostr publishing disabled by setting (nostr_publishing_enabled={})", normalized)
-                return False
-            
-            logger.debug("cyberherd_messaging: nostr publishing enabled by setting (nostr_publishing_enabled={})", normalized)
-        else:
-            # Missing DB row = enabled (backward compatible default)
-            logger.debug("cyberherd_messaging: nostr_publishing_enabled setting not found, defaulting to enabled")
-            
-    except Exception as exc:
-        # Database error - fall back to enabled but warn
-        logger.warning(
-            "cyberherd_messaging: failed to read nostr_publishing_enabled setting, defaulting to enabled (%s)",
-            exc,
-        )
-    
-    # If setting is enabled (or missing/errored), check nostrclient availability
+    if not await _is_publishing_setting_enabled(user_id):
+        return False
     return await _is_nostrclient_available()
 
 
@@ -328,10 +333,23 @@ async def publish_note(
     - Signs the event via nsec_oracle using the provided wallet_id.
     - Supports e_tags (reply threading), p_tags (mentions), and arbitrary tags.
     - Returns False if signing fails (no local-key fallback).
+
+    Return-value semantics (so callers can tell a real failure from a no-op):
+    - Publishing disabled by setting  -> True  (intentional no-op)
+    - Publishing enabled but nostrclient unavailable -> False (real failure)
+    - Signing/publish failure          -> False
     """
-    enabled = await is_nostr_publishing_enabled(user_id)
-    if not enabled:
-        return True
+    if not await is_nostr_publishing_enabled(user_id):
+        # Distinguish "disabled by setting" (an intentional no-op that should
+        # report success) from "enabled but nostrclient unavailable" (a real
+        # failure). Returning True in the latter case would tell callers a note
+        # was published when it was not.
+        if not await _is_publishing_setting_enabled(user_id):
+            return True
+        logger.warning(
+            "cyberherd_messaging: nostr publishing is enabled but nostrclient is unavailable; cannot publish note"
+        )
+        return False
 
     # Merge convenience tags with NIP-10 markers and deduplication
     all_tags: list[tuple[str, ...]] = []

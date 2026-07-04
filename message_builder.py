@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import random
 import re
+import string
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -31,6 +32,35 @@ from .defaults import (
 from .utils import get_random_goat_names, join_with_and
 from lnbits.utils.nostr import hex_to_npub
 from .templates import messaging_templates as TEMPLATES
+
+
+class _SafeFormatter(string.Formatter):
+    """Formatter that only allows simple ``{name}`` substitution.
+
+    Blocks attribute access (``{x.__class__}``) and item access (``{x[0]}``),
+    and leaves unknown placeholders intact instead of raising, so a template
+    with an extra field renders partially rather than failing the whole note.
+    Mirrors the formatter used in services.py so both rendering paths behave
+    identically.
+    """
+
+    def get_field(self, field_name, args, kwargs):
+        if not isinstance(field_name, str) or not field_name.isidentifier():
+            raise ValueError(
+                f"Only simple variable names allowed in templates, got: {field_name!r}"
+            )
+        try:
+            return kwargs[field_name], field_name
+        except KeyError:
+            return f"{{{field_name}}}", field_name
+
+
+_safe_formatter = _SafeFormatter()
+
+
+def _safe_format(template: Any, **kwargs: Any) -> str:
+    """Render ``template`` with the safe formatter (attribute/index access blocked)."""
+    return _safe_formatter.format(str(template), **kwargs)
 
 
 @dataclass(slots=True)
@@ -197,7 +227,7 @@ def _format_thanks(amount: int | float, template_overrides: Optional[Dict[str, D
     if not text:
         return ""
     try:
-        return text.format(new_amount=amount)
+        return _safe_format(text, new_amount=amount)
     except Exception:
         return text
 
@@ -214,7 +244,7 @@ def _format_variation(difference: int | float, template_overrides: Optional[Dict
         template = _pick_template(VARIATIONS)
 
     try:
-        return template.format(difference=difference)
+        return _safe_format(template, difference=difference)
     except Exception:
         return template
 
@@ -266,7 +296,7 @@ def _safe_template_content(template: Any) -> str:
 def _format_template(template: Any, **kwargs: Any) -> str:
     base = _safe_template_content(template)
     try:
-        return base.format(**kwargs)
+        return _safe_format(base, **kwargs)
     except Exception:
         return base
 
@@ -427,12 +457,14 @@ async def build_message(
         if "{goat_name}" in content:
             goat_data, goat_names, goat_profiles, goat_mentions = _select_goats()
 
-        nostr_body = content.format(
+        nostr_body = _safe_format(
+            content,
             new_amount=new_amount,
             goat_name=goat_mentions or goat_profiles,
             difference_message=difference_message,
         )
-        websocket_body = content.format(
+        websocket_body = _safe_format(
+            content,
             new_amount=new_amount,
             goat_name=goat_names,
             difference_message=difference_message,
@@ -737,12 +769,14 @@ async def build_message(
             if "{goat_name}" in content:
                 goat_data, goat_names, goat_profiles, goat_mentions = _select_goats()
 
-            nostr_body = content.format(
+            nostr_body = _safe_format(
+                content,
                 new_amount=new_amount,
                 goat_name=goat_mentions or goat_profiles,
                 difference_message=difference_message,
             )
-            websocket_body = content.format(
+            websocket_body = _safe_format(
+                content,
                 new_amount=new_amount,
                 goat_name=goat_names,
                 difference_message=difference_message,

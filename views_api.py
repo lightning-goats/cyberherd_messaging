@@ -9,12 +9,12 @@ import random
 
 from loguru import logger
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Security
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 
 from lnbits.core.models import WalletTypeInfo
-from lnbits.decorators import require_admin_key, api_key_header
-from lnbits.core.crud import get_wallet_for_key, get_user_active_extensions_ids, get_wallets
+from lnbits.decorators import require_admin_key, require_invoice_key
+from lnbits.core.crud import get_user_active_extensions_ids, get_wallets
 
 from . import crud, services
 from .defaults import SEED_DEFAULTS
@@ -693,37 +693,40 @@ class SettingsPayload(BaseModel):
     nostr_publishing_enabled: Optional[bool] = None
 
 
-@cyberherd_messaging_api_router.get(
-    "/api/v1/settings",
-    summary="Get extension settings",
-    description="Retrieves current extension settings. Public endpoint for reading settings."
-)
-async def api_get_settings(api_key: Optional[str] = Security(api_key_header)):
-    """Get current extension settings.
-    
-    Public endpoint - no authentication required for reading settings.
-    """
-    enabled = True
+async def _build_settings_response(user_id: str) -> dict:
+    """Assemble the settings + bunker-status response for a specific user."""
+    val = await crud.get_user_setting(user_id, "nostr_publishing_enabled")
+    enabled = True if val is None else (str(val).strip().lower() not in ("0", "false", "no", "off", ""))
+
     bunker = {"installed": False, "has_key": False, "pubkey": None, "has_permissions": False}
-    if api_key:
-        wallet = await get_wallet_for_key(api_key)
-        if wallet:
-            val = await crud.get_user_setting(wallet.user, "nostr_publishing_enabled")
-            enabled = True if val is None else (str(val).strip().lower() not in ("0", "false", "no", "off", ""))
-            # Check all user wallets for bunker key (the key may be on a
-            # different wallet, e.g. the herd_wallet configured in cyberherd)
-            user_wallets = await get_wallets(wallet.user)
-            for uw in user_wallets:
-                status = await services.check_bunker_status(uw.id)
-                if status.get("has_key"):
-                    bunker = status
-                    break
-                if status.get("installed") and not bunker.get("installed"):
-                    bunker = status
+    # Check all user wallets for a bunker key (the key may be on a different
+    # wallet, e.g. the herd_wallet configured in cyberherd).
+    for uw in await get_wallets(user_id):
+        status = await services.check_bunker_status(uw.id)
+        if status.get("has_key"):
+            bunker = status
+            break
+        if status.get("installed") and not bunker.get("installed"):
+            bunker = status
     return {
         "nostr_publishing_enabled": enabled,
         "bunker": bunker,
     }
+
+
+@cyberherd_messaging_api_router.get(
+    "/api/v1/settings",
+    summary="Get extension settings",
+    description="Retrieves current extension settings for the authenticated wallet's user."
+)
+async def api_get_settings(wallet_info: WalletTypeInfo = Depends(require_invoice_key)):
+    """Get current extension settings.
+
+    Requires a valid wallet key (invoice or admin). Settings and bunker status
+    are scoped to the authenticated wallet's user, so an unauthenticated caller
+    can no longer probe arbitrary keys or enumerate bunker status.
+    """
+    return await _build_settings_response(wallet_info.wallet.user)
 
 
 @cyberherd_messaging_api_router.put(
@@ -753,6 +756,6 @@ async def api_update_settings(
             "1" if payload.nostr_publishing_enabled else "0",
         )
 
-    return await api_get_settings(wallet_info.wallet.adminkey)
+    return await _build_settings_response(wallet_info.wallet.user)
 
 __all__ = ["cyberherd_messaging_api_router"]
