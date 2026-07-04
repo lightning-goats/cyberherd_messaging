@@ -115,7 +115,7 @@ async def api_publish_note(
         if not bunker_wid:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
-                detail="No nsecbunker key configured",
+                detail="No Nsec Oracle key configured",
             )
         ok = await services.try_publish_note(
             payload.content,
@@ -202,7 +202,7 @@ async def api_publish_template(
     if not bunker_wid:
         raise HTTPException(
             status_code=HTTPStatus.BAD_REQUEST,
-            detail="No nsecbunker key configured",
+            detail="No Nsec Oracle key configured",
         )
 
     try:
@@ -238,7 +238,7 @@ async def api_publish_template_with_values(
         if not bunker_wid and not payload.return_websocket_message:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
-                detail="No nsecbunker key configured",
+                detail="No Nsec Oracle key configured",
             )
         result = await services.render_and_publish_template(
             user_id=wallet_info.wallet.user,

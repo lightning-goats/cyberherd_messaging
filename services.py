@@ -100,7 +100,7 @@ async def _try_bunker_sign_and_publish(
     kind: int,
     tags: list[list[str]],
 ) -> bool:
-    """Sign an event via nsecbunker and publish to relays.
+    """Sign an event via nsec_oracle and publish to relays.
 
     Returns True on success, False if bunker is unavailable, has no key,
     lacks permission, or is rate-limited.
@@ -109,9 +109,9 @@ async def _try_bunker_sign_and_publish(
         return False
 
     try:
-        from lnbits.extensions.nsecbunker.services import sign_event
+        from lnbits.extensions.nsec_oracle.services import sign_event
     except ImportError:
-        logger.debug("cyberherd_messaging: nsecbunker not installed, skipping bunker signing")
+        logger.debug("cyberherd_messaging: nsec_oracle not installed, skipping signing")
         return False
 
     try:
@@ -159,7 +159,7 @@ async def get_bunker_pubkey(wallet_id: str | None) -> str | None:
     if not wallet_id:
         return None
     try:
-        from lnbits.extensions.nsecbunker.services import get_wallet_pubkey
+        from lnbits.extensions.nsec_oracle.services import get_wallet_pubkey
 
         return await get_wallet_pubkey(wallet_id)
     except ImportError:
@@ -169,7 +169,7 @@ async def get_bunker_pubkey(wallet_id: str | None) -> str | None:
 
 
 async def check_bunker_status(wallet_id: str | None) -> dict:
-    """Check nsecbunker availability and configuration for a wallet.
+    """Check nsec_oracle availability and configuration for a wallet.
 
     Returns a dict with keys: installed, has_key, pubkey, has_permissions.
     """
@@ -178,7 +178,7 @@ async def check_bunker_status(wallet_id: str | None) -> dict:
         return result
 
     try:
-        from lnbits.extensions.nsecbunker.services import get_wallet_pubkey
+        from lnbits.extensions.nsec_oracle.services import get_wallet_pubkey
     except ImportError:
         return result
 
@@ -197,7 +197,7 @@ async def check_bunker_status(wallet_id: str | None) -> dict:
 
     # Check permissions for cyberherd_messaging (kind 1 and kind 1311)
     try:
-        from lnbits.extensions.nsecbunker.crud import get_permission_for_signing
+        from lnbits.extensions.nsec_oracle.crud import get_permission_for_signing
 
         perm_1 = await get_permission_for_signing(wallet_id, "cyberherd_messaging", 1)
         perm_1311 = await get_permission_for_signing(wallet_id, "cyberherd_messaging", 1311)
@@ -209,13 +209,13 @@ async def check_bunker_status(wallet_id: str | None) -> dict:
 
 
 async def find_bunker_wallet(user_id: str) -> str | None:
-    """Return the first wallet_id for *user_id* that has an nsecbunker key.
+    """Return the first wallet_id for *user_id* that has an nsec_oracle key.
 
-    Returns None if nsecbunker is not installed or no wallet has a key.
+    Returns None if nsec_oracle is not installed or no wallet has a key.
     """
     try:
         from lnbits.core.crud import get_wallets
-        from lnbits.extensions.nsecbunker.services import get_wallet_pubkey
+        from lnbits.extensions.nsec_oracle.services import get_wallet_pubkey
     except ImportError:
         return None
 
@@ -323,11 +323,11 @@ async def publish_note(
     user_id: str | None = None,
     wallet_id: str,
 ) -> bool:
-    """Publish a nostr note via nsecbunker signing only.
+    """Publish a nostr note via nsec_oracle signing only.
 
-    - Signs the event via nsecbunker using the provided wallet_id.
+    - Signs the event via nsec_oracle using the provided wallet_id.
     - Supports e_tags (reply threading), p_tags (mentions), and arbitrary tags.
-    - Returns False if bunker signing fails (no local-key fallback).
+    - Returns False if signing fails (no local-key fallback).
     """
     enabled = await is_nostr_publishing_enabled(user_id)
     if not enabled:
@@ -415,7 +415,7 @@ async def publish_note(
         if candidate:
             _add_tag(("a", candidate))
 
-    # --- Sign via nsecbunker and publish ---
+    # --- Sign via nsec_oracle and publish ---
     formatted_tags = []
     for tag in all_tags:
         if isinstance(tag, (list, tuple)):
@@ -437,7 +437,7 @@ async def publish_note(
         return True
 
     logger.warning(
-        "cyberherd_messaging: bunker signing failed for wallet {}, no fallback available",
+        "cyberherd_messaging: signing failed for wallet {}, no fallback available",
         wallet_id[:12] if wallet_id else "?",
     )
     return False

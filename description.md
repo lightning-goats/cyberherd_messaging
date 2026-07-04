@@ -17,12 +17,12 @@ This extension provides shared messaging utilities for LNbits extensions, includ
 ```python
 from lnbits.extensions.cyberherd_messaging import services as chm
 
-# Publish a note to Nostr (signing via nsecbunker)
+# Publish a note to Nostr (signing via nsec_oracle)
 await chm.try_publish_note(
     "Hello from CyberHerd!",
     e_tags=["<note_id>"],
     p_tags=["<pubkey>"],
-    wallet_id="<wallet_id>"  # wallet with nsecbunker key
+    wallet_id="<wallet_id>"  # wallet with nsec_oracle key
 )
 
 # Broadcast to websockets
@@ -37,5 +37,5 @@ await chm.send_to_websocket_clients("topic", {"type": "update", "data": "..."})
 ## Dependencies
 
 - Requires the `nostrclient` extension for Nostr publishing
-- Requires the `nsecbunker` extension for event signing
+- Requires the `nsec_oracle` extension for event signing
 - Uses LNbits core websocket updater for broadcasting

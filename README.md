@@ -10,7 +10,7 @@ A comprehensive messaging infrastructure extension for LNbits that provides dual
 
 ### Security & Privacy
 - Admin key authentication required for all publishing endpoints
-- Event signing delegated to nsecbunker (no local private key handling)
+- Event signing delegated to nsec_oracle (no local private key handling)
 - Global toggle for enabling/disabling Nostr publishing
 
 ### Template System
@@ -41,7 +41,7 @@ This extension is designed to work with LNbits and requires the `nostrclient` ex
 ### Dependencies
 - LNbits core
 - nostrclient extension (for Nostr publishing)
-- nsecbunker extension (for event signing)
+- nsec_oracle extension (for event signing)
 - bech32 library
 
 ## Configuration
@@ -50,7 +50,7 @@ This extension is designed to work with LNbits and requires the `nostrclient` ex
 - `nostr_publishing_enabled`: Toggle Nostr publishing on/off (default: enabled)
 
 ### Signing
-All event signing is handled by the nsecbunker extension. Configure a key in nsecbunker and grant the `cyberherd_messaging` extension permission to sign events for the desired kinds.
+All event signing is handled by the nsec_oracle extension. Configure a key in nsec_oracle and grant the `cyberherd_messaging` extension permission to sign events for the desired kinds.
 
 ## Usage
 
@@ -61,7 +61,7 @@ All event signing is handled by the nsecbunker extension. Configure a key in nse
 ```python
 from lnbits.extensions.cyberherd_messaging import services
 
-# Simple note (wallet_id references the wallet with an nsecbunker key)
+# Simple note (wallet_id references the wallet with an nsec_oracle key)
 await services.publish_note(
     "Hello from CyberHerd!",
     wallet_id="your_wallet_id"
@@ -322,7 +322,7 @@ CREATE TABLE cyberherd_messaging.user_settings (
 1. **Template Rendering** - Dynamic content generation with variable substitution
 2. **Validation** - Pubkey, nprofile, and content validation
 3. **Message Building** - Dual-format message creation (Nostr + WebSocket)
-4. **Signing** - Event signing via nsecbunker (wallet_id lookup)
+4. **Signing** - Event signing via nsec_oracle (wallet_id lookup)
 5. **Publishing** -
    - Nostr: Relay publishing via nostrclient
    - WebSocket: JSON serialization and broadcast
