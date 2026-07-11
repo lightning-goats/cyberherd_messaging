@@ -700,6 +700,18 @@ _CALL_TO_ACTION_CATEGORIES = frozenset(
 # reach the websocket overlay, which shows human display names.
 _NOSTR_MENTION_RE = re.compile(r"(?:nostr:)?(?:npub1|nprofile1)[0-9a-z]+", re.IGNORECASE)
 
+# For websocket rendering, each name-like placeholder maps to its own ordered
+# list of display-name source keys. This keeps a two-party message (attacker +
+# victim) showing the correct display name for each, rather than a single name
+# for both.
+_WS_DISPLAY_SOURCES = {
+    "name": ("attacker_display_name", "member_display_name", "display_name"),
+    "attacker_name": ("attacker_display_name", "display_name"),
+    "victim_name": ("victim_display_name",),
+    "member_name": ("member_display_name", "display_name"),
+    "display": ("display_name", "member_display_name"),
+}
+
 
 def _looks_like_mention(value: str) -> bool:
     """True when a string is (or contains) a Nostr npub/nprofile mention token."""
@@ -904,27 +916,33 @@ async def render_and_publish_template(
     # must show human display names. Substitute every name-like value that looks
     # like a mention with the best available display name.
     if return_websocket_message and isinstance(values, dict):
-        display_name_for_ws = (
+        generic_display = (
             values.get("member_display_name")
             or values.get("display_name")
             or (values.get("cyber_herd_item", {}) or {}).get("display_name")
         )
-        # The chosen display name must not itself be a mention.
-        if isinstance(display_name_for_ws, str) and _looks_like_mention(display_name_for_ws):
-            display_name_for_ws = None
-        if display_name_for_ws:
-            values = dict(values)
-            for _name_key in (
-                "name",
-                "member_name",
-                "attacker_name",
-                "victim_name",
-                "display",
-                "display_name",
-            ):
-                current = values.get(_name_key)
-                if isinstance(current, str) and _looks_like_mention(current):
-                    values[_name_key] = display_name_for_ws
+        # A generic fallback must not itself be a mention.
+        if isinstance(generic_display, str) and _looks_like_mention(generic_display):
+            generic_display = None
+
+        def _first_clean_display(source_keys):
+            for k in source_keys:
+                v = values.get(k)
+                if isinstance(v, str) and v and not _looks_like_mention(v):
+                    return v
+            return generic_display
+
+        replaced = None
+        for _name_key, _sources in _WS_DISPLAY_SOURCES.items():
+            current = values.get(_name_key)
+            if isinstance(current, str) and _looks_like_mention(current):
+                repl = _first_clean_display(_sources)
+                if repl:
+                    if replaced is None:
+                        replaced = dict(values)
+                    replaced[_name_key] = repl
+        if replaced is not None:
+            values = replaced
 
     # Render the template
     try:

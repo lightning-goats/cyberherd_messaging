@@ -641,6 +641,43 @@ async def test_websocket_never_leaks_nprofile(monkeypatch):
     assert "nprofile1" not in content
 
 
+@pytest.mark.anyio
+async def test_websocket_uses_per_entity_display_names(monkeypatch):
+    """A two-party failure message: attacker and victim each carry an nprofile
+    mention for Nostr, but the websocket overlay must show each one's own display
+    name (not a single name for both, and never a nostr: mention)."""
+    base = "{name} tried to bump {victim_name} and failed."
+    cta = "\U0001f449 Zap more than {required_sats} sats to displace {victim_name}."
+
+    async def mock_get_template(user_id, category, key):
+        if category == "call_to_action":
+            return _tpl(cta)
+        return _tpl(base)
+
+    monkeypatch.setattr("cyberherd_messaging.crud.get_message_template", mock_get_template)
+
+    content, _goat = await services.render_and_publish_template(
+        user_id="test_user",
+        category="kind_6_headbutt_failure",
+        key="0",
+        values={
+            "name": "nostr:nprofile1qqsattacker",
+            "attacker_name": "nostr:nprofile1qqsattacker",
+            "attacker_display_name": "Sat",
+            "victim_name": "nostr:nprofile1qqsvictim",
+            "victim_display_name": "DarkRoastJedi",
+            "required_sats": 22,
+        },
+        return_websocket_message=True,
+        wallet_id=MOCK_WALLET_ID,
+    )
+
+    assert "Sat" in content
+    assert "DarkRoastJedi" in content
+    assert "nostr:" not in content
+    assert "nprofile1" not in content
+
+
 def test_strip_nostr_mentions_helper():
     """The websocket safety-net removes npub/nprofile tokens with or without the
     nostr: prefix."""

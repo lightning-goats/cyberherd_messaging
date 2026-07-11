@@ -1,6 +1,6 @@
 {
   "name": "CyberHerd Messaging",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "short_description": "Shared messaging utilities for LNbits extensions (websocket + nostr via nostrclient)",
   "tile": "/cyberherd_messaging/static/icon.png",
   "min_lnbits_version": "1.3.0",
