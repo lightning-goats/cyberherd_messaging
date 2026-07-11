@@ -682,6 +682,47 @@ async def _augment_membership_rendered_content(
         return base_content, None
 
 
+# Categories whose messages are rejections/failures. Each gets a short
+# call-to-action appended so the message doubles as inline documentation of how
+# the user can actually headbutt. The CTA template is stored under the
+# "call_to_action" category, keyed by the rejection category name.
+_CALL_TO_ACTION_CATEGORIES = frozenset(
+    {
+        "join_below_minimum",
+        "headbutt_failure",
+        "kind_6_headbutt_failure",
+        "kind_7_headbutt_failure",
+    }
+)
+
+# Matches a Nostr mention token: nostr:npub1…, nostr:nprofile1…, or a bare
+# npub1…/nprofile1… bech32 identifier. These belong only on Nostr and must never
+# reach the websocket overlay, which shows human display names.
+_NOSTR_MENTION_RE = re.compile(r"(?:nostr:)?(?:npub1|nprofile1)[0-9a-z]+", re.IGNORECASE)
+
+
+def _looks_like_mention(value: str) -> bool:
+    """True when a string is (or contains) a Nostr npub/nprofile mention token."""
+    if not isinstance(value, str):
+        return False
+    return "nostr:" in value or bool(_NOSTR_MENTION_RE.search(value))
+
+
+def _strip_nostr_mentions(text: str, replacement: str = "") -> str:
+    """Remove any residual Nostr mention tokens from websocket-bound text.
+
+    Belt-and-suspenders net: even if some template placeholder slipped an
+    nprofile through, the live-stream overlay never shows a raw npub/nprofile.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    cleaned = _NOSTR_MENTION_RE.sub(replacement, text)
+    # Tidy up artifacts left by removal (double spaces, "nostr:" remnants).
+    cleaned = cleaned.replace("nostr:", "")
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    return cleaned
+
+
 async def render_and_publish_template(
     *,
     user_id: str,
@@ -858,20 +899,32 @@ async def render_and_publish_template(
                 # Force-set goat_name to nprofiles for Nostr messages
                 values["goat_name"] = bundle.get("profiles", "")
 
-    # For websocket messages, substitute {name} with display name instead of nprofile
+    # For websocket messages (the live-stream overlay), never emit Nostr mentions.
+    # nostr:npub / nostr:nprofile identifiers belong only on Nostr; the overlay
+    # must show human display names. Substitute every name-like value that looks
+    # like a mention with the best available display name.
     if return_websocket_message and isinstance(values, dict):
-        # Get display_name from various possible sources
         display_name_for_ws = (
             values.get("member_display_name")
             or values.get("display_name")
             or (values.get("cyber_herd_item", {}) or {}).get("display_name")
         )
-        # Only substitute if we have a display name and the current name looks like an nprofile
+        # The chosen display name must not itself be a mention.
+        if isinstance(display_name_for_ws, str) and _looks_like_mention(display_name_for_ws):
+            display_name_for_ws = None
         if display_name_for_ws:
-            current_name = values.get("name", "")
-            if isinstance(current_name, str) and ("nostr:" in current_name or current_name.startswith("nprofile")):
-                values = dict(values)
-                values["name"] = display_name_for_ws
+            values = dict(values)
+            for _name_key in (
+                "name",
+                "member_name",
+                "attacker_name",
+                "victim_name",
+                "display",
+                "display_name",
+            ):
+                current = values.get(_name_key)
+                if isinstance(current, str) and _looks_like_mention(current):
+                    values[_name_key] = display_name_for_ws
 
     # Render the template
     try:
@@ -898,7 +951,27 @@ async def render_and_publish_template(
             reply_to_30311_a_tag=reply_to_30311_a_tag,
             template_overrides=template_overrides,
         )
-    
+
+    # Append a call-to-action for rejection/failure categories so every such
+    # message doubles as brief inline documentation of how to headbutt. The CTA
+    # is a single reusable snippet per scenario stored under "call_to_action",
+    # keyed by the rejection category. Rendered with the same values, appended to
+    # both the Nostr note and the websocket text.
+    if category in _CALL_TO_ACTION_CATEGORIES and isinstance(values, dict):
+        try:
+            cta_obj = await crud.get_message_template(user_id, "call_to_action", category)
+            cta_raw = None
+            if cta_obj and getattr(cta_obj, "content", None):
+                cta_raw, _cta_reply = _extract_content_and_reply(cta_obj.content)
+            if cta_raw:
+                cta_rendered = _safe_fmt.format(str(cta_raw), **values).strip()
+                if cta_rendered:
+                    rendered_content = rendered_content.rstrip() + "\n\n" + cta_rendered
+        except Exception as e:
+            logger.warning(
+                f"cyberherd_messaging: failed to append call_to_action for {category}: {e}"
+            )
+
     if return_websocket_message:
         goat_data = None
         if augmented_bundle and augmented_bundle.goat_data:
@@ -909,6 +982,8 @@ async def render_and_publish_template(
         ws_content = rendered_content
         if augmented_bundle and augmented_bundle.websocket_content:
             ws_content = augmented_bundle.websocket_content
+        # Final safety net: the overlay must never show a raw npub/nprofile.
+        ws_content = _strip_nostr_mentions(ws_content)
         return (ws_content, goat_data)
     
     # Publish to nostr

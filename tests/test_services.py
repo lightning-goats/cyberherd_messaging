@@ -507,9 +507,10 @@ async def test_render_template_uses_authenticated_user_for_overrides(monkeypatch
 
 
 @pytest.mark.anyio
-async def test_headbutt_failure_fills_required_sats_placeholder():
-    """H2: default headbutt_failure templates use {required_sats}; it must be
-    filled, not left as a literal placeholder."""
+async def test_headbutt_failure_builder_renders_outcome():
+    """The brief builder-path headbutt_failure message renders the attacker and
+    victim names/amounts with no leftover placeholders. (Actionable guidance now
+    lives in the appended call_to_action snippet on the DB-render path.)"""
     import cyberherd_messaging.message_builder as mb
     bundle = await mb.build_message(
         "headbutt_failure",
@@ -521,9 +522,10 @@ async def test_headbutt_failure_fills_required_sats_placeholder():
             "required_amount": 42,
         },
     )
-    assert "{required_sats}" not in bundle.nostr_content
-    assert "{required_amount}" not in bundle.nostr_content
-    assert "42" in bundle.nostr_content
+    assert "{" not in bundle.nostr_content  # no unfilled placeholders
+    assert "Alice" in bundle.nostr_content
+    assert "Bob" in bundle.nostr_content
+    assert "100" in bundle.nostr_content
 
 
 @pytest.mark.anyio
@@ -567,3 +569,83 @@ async def test_publish_note_refuses_empty_content(monkeypatch):
     result = await services.publish_note("   ", wallet_id=MOCK_WALLET_ID)
     assert result is True
     assert not mock_bunker.called
+
+
+# ---------------------------------------------------------------------------
+# Call-to-action append + websocket nprofile-leak protection
+# ---------------------------------------------------------------------------
+
+
+def _tpl(content):
+    return type("MockTemplate", (), {"content": content, "reply_relay": None})()
+
+
+@pytest.mark.anyio
+async def test_call_to_action_appended_to_rejection(monkeypatch):
+    """A rejection category gets its call_to_action snippet appended, so the
+    message doubles as inline documentation (e.g. the kind-7 reaction failure
+    explains the repost/zap options)."""
+    base = "⚡ CyberHerd ⚡: Thanks for the reaction, {name} — the herd is full."
+    cta = "\U0001f449 Reactions can't headbutt. Repost to bump a repost/reaction member, or zap more than {required_sats} sats to displace {victim_name}."
+
+    async def mock_get_template(user_id, category, key):
+        if category == "call_to_action":
+            assert key == "kind_7_headbutt_failure"  # keyed by the rejection category
+            return _tpl(cta)
+        return _tpl(base)
+
+    monkeypatch.setattr("cyberherd_messaging.crud.get_message_template", mock_get_template)
+
+    content, _goat = await services.render_and_publish_template(
+        user_id="test_user",
+        category="kind_7_headbutt_failure",
+        key="0",
+        values={"name": "Alice", "required_sats": 200, "victim_name": "Bob"},
+        return_websocket_message=True,
+        wallet_id=MOCK_WALLET_ID,
+    )
+
+    assert "the herd is full" in content          # base outcome preserved
+    assert "Reactions can't headbutt" in content  # CTA appended
+    assert "Repost to bump" in content            # the missing repost guidance
+    assert "200" in content and "Bob" in content  # CTA rendered with values
+
+
+@pytest.mark.anyio
+async def test_websocket_never_leaks_nprofile(monkeypatch):
+    """The websocket overlay must show display names, never nostr: mentions.
+    Even when {name}/{member_name} carry an nprofile, the ws render swaps in the
+    display name and the final net strips any residual mention token."""
+    base = "{member_name} increased their contribution. cc nostr:nprofile1qqsleftover"
+
+    async def mock_get_template(user_id, category, key):
+        return _tpl(base)
+
+    monkeypatch.setattr("cyberherd_messaging.crud.get_message_template", mock_get_template)
+
+    content, _goat = await services.render_and_publish_template(
+        user_id="test_user",
+        category="member_increase",
+        key="0",
+        values={
+            "member_name": "nostr:nprofile1qqsalice",
+            "name": "nostr:nprofile1qqsalice",
+            "member_display_name": "Alice",
+        },
+        return_websocket_message=True,
+        wallet_id=MOCK_WALLET_ID,
+    )
+
+    assert "Alice" in content
+    assert "nostr:" not in content
+    assert "nprofile1" not in content
+
+
+def test_strip_nostr_mentions_helper():
+    """The websocket safety-net removes npub/nprofile tokens with or without the
+    nostr: prefix."""
+    assert services._looks_like_mention("nostr:nprofile1abc") is True
+    assert services._looks_like_mention("npub1xyz") is True
+    assert services._looks_like_mention("Alice") is False
+    stripped = services._strip_nostr_mentions("hi nostr:npub1abc and nprofile1def end")
+    assert "npub1" not in stripped and "nprofile1" not in stripped and "nostr:" not in stripped

@@ -70,12 +70,14 @@ HEADBUTT_SUCCESS = {
     "4": {"content": "⚡headbutt⚡: Update: {attacker_name} is now a member of the ⚡ CyberHerd ⚡ with a {attacker_amount} sat contribution, replacing {victim_name} ({victim_amount} sats).\n\n https://lightning-goats.com\n\n", "reply_relay": "https://relay.snort.social"}
 }
 
+# Brief outcome-only failure lines. The actionable guidance ("how to actually
+# headbutt") lives in the CALL_TO_ACTION category and is appended at render time.
 HEADBUTT_FAILURE = {
-    "0": "⚡headbutt⚡: The ⚡ CyberHerd ⚡ is currently at full capacity. To join, a contribution of {required_sats} sats is needed to displace the member with the lowest contribution, {victim_name}.\n\n https://lightning-goats.com\n\n",
-    "1": "⚡headbutt⚡: The ⚡ CyberHerd ⚡ is at capacity. A contribution greater than {required_sats} sats will grant you {victim_name}'s position.\n\n https://lightning-goats.com\n\n",
-    "2": "⚡headbutt⚡: The ⚡ CyberHerd ⚡ is full. To become a member, you must contribute more than the lowest member's amount of {required_sats} sats, currently held by {victim_name}.\n\n https://lightning-goats.com\n\n",
-    "3": "⚡headbutt⚡: Membership in the ⚡ CyberHerd ⚡ is currently full. You can gain a spot by contributing at least {required_sats} sats, which will displace {victim_name}.\n\n https://lightning-goats.com\n\n",
-    "4": "⚡headbutt⚡: There are no available spots in the ⚡ CyberHerd ⚡. A contribution of {required_sats} sats or more is required to take the place of {victim_name}.\n\n https://lightning-goats.com\n\n"
+    "0": "⚡headbutt⚡: The ⚡ CyberHerd ⚡ is full and {attacker_name}'s {attacker_amount} sats didn't top {victim_name}.",
+    "1": "⚡headbutt⚡: No luck this time, {attacker_name} — {attacker_amount} sats wasn't enough to unseat {victim_name}.",
+    "2": "⚡headbutt⚡: The herd is at capacity and {attacker_name}'s {attacker_amount} sats fell short of {victim_name}.",
+    "3": "⚡headbutt⚡: {attacker_name}'s {attacker_amount} sats didn't clear {victim_name}'s spot — the herd stays full.",
+    "4": "⚡headbutt⚡: So close, {attacker_name}! {attacker_amount} sats didn't overtake {victim_name}."
 }
 
 HEADBUTT_INFO = {
@@ -156,12 +158,27 @@ SATS_RECEIVED = {
 
 # Rejection when a free spot exists but the contribution is below the join
 # minimum (no member is displaced — must not use "displace" wording).
+# Brief outcome-only lines; the CALL_TO_ACTION category supplies the next step.
 JOIN_BELOW_MINIMUM = {
-    "0": "⚡ CyberHerd ⚡: {name}'s contribution of {attacker_amount} sats is below the {required_sats} sats needed to join the herd. A little more will get you in!\n\n https://lightning-goats.com\n\n",
-    "1": "Almost there, {name}! Your {attacker_amount} sats fall short of the {required_sats} sats required to join the ⚡ CyberHerd ⚡ — {difference} more to go.\n\n https://lightning-goats.com\n\n",
-    "2": "The ⚡ CyberHerd ⚡ has an open spot, but requires at least {required_sats} sats to join. {name} contributed {attacker_amount} sats.\n\n https://lightning-goats.com\n\n",
-    "3": "So close, {name}! {difference} more sats and your {attacker_amount} sat contribution would clear the {required_sats} sat minimum to join the ⚡ CyberHerd ⚡.\n\n https://lightning-goats.com\n\n",
-    "4": "A minimum of {required_sats} sats is needed to join the ⚡ CyberHerd ⚡. {name}'s {attacker_amount} sats didn't quite reach it this time.\n\n https://lightning-goats.com\n\n",
+    "0": "⚡ CyberHerd ⚡: A spot is open, but {name}'s {attacker_amount} sats is under the {required_sats} sat minimum to join.",
+    "1": "⚡ CyberHerd ⚡: Almost, {name}! {attacker_amount} sats is just shy of the {required_sats} sats needed to join.",
+    "2": "⚡ CyberHerd ⚡: {name} sent {attacker_amount} sats — the open spot needs at least {required_sats} sats.",
+    "3": "⚡ CyberHerd ⚡: So close, {name}! {attacker_amount} sats falls {difference} short of the {required_sats} sat minimum.",
+    "4": "⚡ CyberHerd ⚡: {name}'s {attacker_amount} sats didn't reach the {required_sats} sat join minimum this time.",
+}
+
+# Reusable "here's how to headbutt" snippets, keyed by the rejection category
+# they attach to. render_and_publish_template appends the matching snippet to
+# every rejection message so each one doubles as inline documentation.
+CALL_TO_ACTION = {
+    # Below-minimum zap while a spot is open: repost/react is free, or zap the minimum.
+    "join_below_minimum": "👉 Repost or react to grab the open spot for free, or zap at least {required_sats} sats to join with a payout share.\n\n https://lightning-goats.com/leaderboard",
+    # Zap didn't beat the lowest member (full herd of zappers).
+    "headbutt_failure": "👉 Zap more than {required_sats} sats to displace {victim_name} and take their spot.\n\n https://lightning-goats.com/leaderboard",
+    # Repost, but every member has zapped — nothing a repost can displace.
+    "kind_6_headbutt_failure": "👉 Reposts can only bump repost/reaction members, and every seat here is held by a zapper. Zap more than {required_sats} sats to displace {victim_name}.\n\n https://lightning-goats.com/leaderboard",
+    # Reaction on a full herd — reactions can never headbutt.
+    "kind_7_headbutt_failure": "👉 Reactions can't headbutt. Repost to bump a repost/reaction member, or zap more than {required_sats} sats to displace {victim_name}.\n\n https://lightning-goats.com/leaderboard",
 }
 
 # A non-paying repost that displaces an existing (repost/reaction) member.
@@ -223,4 +240,5 @@ SEED_DEFAULTS: dict[str, dict[str, Any]] = {
     "repost_displaces": REPOST_DISPLACES,
     "existing_member_repost": EXISTING_MEMBER_REPOST,
     "existing_member_reaction": EXISTING_MEMBER_REACTION,
+    "call_to_action": CALL_TO_ACTION,
 }
