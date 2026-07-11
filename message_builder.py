@@ -169,10 +169,10 @@ def validate_nprofile(nprofile: Optional[str]) -> bool:
 
 
 def _pick_template(pool: Dict[str, Any]) -> Any:
-    try:
-        return random.choice(list(pool.values()))
-    except Exception:
-        return next(iter(pool.values()))
+    values = list(pool.values()) if pool else []
+    if not values:
+        return ""
+    return random.choice(values)
 
 
 def _normalize_nprofile(value: Optional[str]) -> Optional[str]:
@@ -243,10 +243,11 @@ def _format_variation(difference: int | float, template_overrides: Optional[Dict
     else:
         template = _pick_template(VARIATIONS)
 
+    base = _safe_template_content(template)
     try:
-        return _safe_format(template, difference=difference)
+        return _safe_format(base, difference=difference)
     except Exception:
-        return template
+        return base
 
 
 def _select_goats() -> tuple[List[Dict[str, str]], str, str, str]:
@@ -263,17 +264,19 @@ def _select_goats() -> tuple[List[Dict[str, str]], str, str, str]:
         # derive an npub from the stored pubkey. If a pubkey exists, append
         # a "p-tag <hex>" fragment so clients can easily extract the raw
         # pubkey for p-tagging.
+        # Build a clean Nostr mention: prefer an explicit nprofile, else an
+        # npub derived from the stored pubkey, else the plain name. Do NOT append
+        # the raw pubkey hex — that used to leak a literal " p-tag <hex>" into the
+        # published note body. Goat pubkeys are promoted to real `p` tags by the
+        # publish path (services.render_and_publish_template), not embedded here.
         identifier = _normalize_nprofile(profile)
         pub_hex = pubkey or None
         npub_from_pubkey = format_nostr_pubkey(pub_hex) if pub_hex else None
 
         if identifier:
-            # identifier is already normalized (starts with 'nostr:')
             identifier_str = str(identifier)
-            if pub_hex:
-                identifier_str = f"{identifier_str} p-tag {pub_hex}"
         elif npub_from_pubkey:
-            identifier_str = f"nostr:{npub_from_pubkey} p-tag {pub_hex}"
+            identifier_str = f"nostr:{npub_from_pubkey}"
         else:
             identifier_str = str(name)
         normalized_profiles.append(identifier_str)
@@ -588,7 +591,9 @@ async def build_message(
             attacker_amount=attacker_amount,
             victim_name=nostr_victim,
             victim_amount=victim_amount,
+            # Templates use either {required_amount} or {required_sats}; supply both.
             required_amount=required_amount,
+            required_sats=required_amount,
         )
         nostr_content = _strip_promotional_link(nostr_content, is_30311_reply=is_30311_reply)
 
@@ -601,6 +606,7 @@ async def build_message(
             victim_name=victim_display_name,
             victim_amount=victim_amount,
             required_amount=required_amount,
+            required_sats=required_amount,
         )
         return MessageBundle(nostr_content=nostr_content, websocket_content=websocket_content)
 
@@ -672,7 +678,7 @@ async def build_message(
         # Implement specialised event rendering using the templates module.
         # Herd reset mirrors the daily reset template.
         if event_type == "herd_reset_message":
-            template = _pick_template(DAILY_RESET)
+            template = _pick_template(_pool("daily_reset", DAILY_RESET))
             content = _format_template(template)
             return MessageBundle(nostr_content=content, websocket_content=content)
 
@@ -682,7 +688,7 @@ async def build_message(
             if tpl_pool is None:
                 logger.warning("message_builder: interface_info templates missing")
                 fallback = json.dumps({"event": event_type, "payload": ch_item}, ensure_ascii=False)
-                return MessageBundle(nostr_content=fallback, websocket_content=fallback)
+                return MessageBundle(nostr_content="", websocket_content=fallback)
 
             template = _pick_template(tpl_pool)
             nostr_content = _format_template(template)
@@ -697,7 +703,7 @@ async def build_message(
             if tpl_pool is None:
                 logger.warning("message_builder: %s templates missing", pool_name)
                 fallback = json.dumps({"event": event_type, "payload": ch_item}, ensure_ascii=False)
-                return MessageBundle(nostr_content=fallback, websocket_content=fallback)
+                return MessageBundle(nostr_content="", websocket_content=fallback)
 
             template = _pick_template(tpl_pool)
             display_name = ch_item.get("display_name", "Anon")
@@ -730,7 +736,7 @@ async def build_message(
             if tpl_pool is None:
                 logger.warning("message_builder: %s templates missing", pool_name)
                 fallback = json.dumps({"event": event_type, "payload": ch_item}, ensure_ascii=False)
-                return MessageBundle(nostr_content=fallback, websocket_content=fallback)
+                return MessageBundle(nostr_content="", websocket_content=fallback)
 
             template = _pick_template(tpl_pool)
             display_name = ch_item.get("display_name", "Anon")
@@ -756,7 +762,7 @@ async def build_message(
 
         # sats_received_zap: reuse sats received templates but mark as zap event
         if event_type == "sats_received_zap":
-            template_pool = SATS_RECEIVED
+            template_pool = _pool("sats_received", SATS_RECEIVED)
             template = _pick_template(template_pool)
             content = _safe_template_content(template)
 
@@ -794,7 +800,7 @@ async def build_message(
             if tpl_pool is None:
                 logger.warning("message_builder: %s templates missing", pool_name)
                 fallback = json.dumps({"event": event_type, "payload": ch_item}, ensure_ascii=False)
-                return MessageBundle(nostr_content=fallback, websocket_content=fallback)
+                return MessageBundle(nostr_content="", websocket_content=fallback)
 
             template = _pick_template(tpl_pool)
 
@@ -841,7 +847,7 @@ async def build_message(
         # Last resort fallback for unexpected missing templates
         logger.warning("message_builder: event type %s is not fully implemented yet.", event_type)
         fallback_content = json.dumps({"event": event_type, "payload": ch_item}, ensure_ascii=False)
-        return MessageBundle(nostr_content=fallback_content, websocket_content=fallback_content)
+        return MessageBundle(nostr_content="", websocket_content=fallback_content)
 
     if event_type in {"feeding_regular", "feeding_bonus", "feeding_remainder", "feeding_fallback"}:
         pools = {
@@ -864,4 +870,4 @@ async def build_message(
     # Fallback: log and return JSON payload so callers can detect unsupported events.
     fallback = json.dumps({"event": event_type, "payload": ch_item}, ensure_ascii=False)
     logger.warning("message_builder: falling back to JSON payload for event %s", event_type)
-    return MessageBundle(nostr_content=fallback, websocket_content=fallback)
+    return MessageBundle(nostr_content="", websocket_content=fallback)

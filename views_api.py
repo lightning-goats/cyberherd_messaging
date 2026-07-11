@@ -356,6 +356,28 @@ async def api_get_template(
     return template.model_dump() if hasattr(template, "model_dump") else template.dict()
 
 
+_MAX_FIELD_LEN = 512
+_MAX_CONTENT_LEN = 100_000
+# "category" collides with the /api/v1/templates/category/{category} routes,
+# so it can never be single-key-addressed; reject it as a category name.
+_RESERVED_CATEGORIES = {"category"}
+
+
+def _validate_template_fields(category: str, key: str, content: "Optional[str]" = None) -> None:
+    if not isinstance(category, str) or not category.strip():
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="category is required")
+    if not isinstance(key, str) or not key.strip():
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="key is required")
+    if len(category) > _MAX_FIELD_LEN or len(key) > _MAX_FIELD_LEN:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="category/key too long")
+    if category.strip().lower() in _RESERVED_CATEGORIES:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST, detail="'category' is a reserved category name"
+        )
+    if content is not None and len(content) > _MAX_CONTENT_LEN:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="content too long")
+
+
 @cyberherd_messaging_api_router.post("/api/v1/templates", status_code=HTTPStatus.CREATED)
 async def api_create_template(
     payload: MessageTemplatePayload,
@@ -383,6 +405,13 @@ async def api_create_template(
         return (raw, None)
 
     tpl_content, tpl_reply = _extract_content_and_reply(payload.content)
+    _validate_template_fields(payload.category, payload.key, tpl_content)
+
+    if await crud.get_message_template(wallet_info.wallet.user, payload.category, payload.key):
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail="Template already exists for this category/key",
+        )
 
     template = await crud.create_message_template(
         wallet_info.wallet.user,
@@ -420,6 +449,7 @@ async def api_rename_category(
 ):
     """Rename a category."""
     await check_extension_enabled(wallet_info.wallet.user)
+    _validate_template_fields(payload.new_category, "_")
     count = await crud.rename_category(wallet_info.wallet.user, category, payload.new_category)
     if count == 0:
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Category not found")
@@ -435,6 +465,7 @@ async def api_update_template(
     wallet_info: WalletTypeInfo = Depends(require_admin_key)
 ):
     await check_extension_enabled(wallet_info.wallet.user)
+    _validate_template_fields(category, key, payload.content)
     success = await crud.update_message_template(
         wallet_info.wallet.user,
         category,
@@ -461,7 +492,9 @@ async def api_delete_template(
 
 
 @cyberherd_messaging_api_router.get("/api/v1/templates/defaults")
-async def api_get_defaults():
+async def api_get_defaults(
+    wallet_info: WalletTypeInfo = Depends(require_invoice_key),
+):
     return {"defaults": SEED_DEFAULTS}
 
 
@@ -482,9 +515,14 @@ async def api_export_templates(
     # Gather templates for this user
     user_id = wallet_info.wallet.user
     templates = await crud.get_message_templates(user_id, None)
-    mapping: dict[str, dict[str, str]] = {}
+    mapping: dict[str, dict[str, Any]] = {}
     for t in templates:
-        mapping.setdefault(t.category, {})[str(t.key)] = t.content
+        # Preserve reply_relay by exporting a {content, reply_relay} dict when it
+        # is set, so an export→import round-trip does not lose it. Otherwise
+        # export the plain content string (backward compatible).
+        reply = getattr(t, "reply_relay", None)
+        value: Any = {"content": t.content, "reply_relay": reply} if reply else t.content
+        mapping.setdefault(t.category, {})[str(t.key)] = value
 
     fmt_lower = (fmt or "").lower()
     if fmt_lower == "py":
@@ -547,7 +585,7 @@ def _parse_dicts_from_python(text: str) -> Dict[str, Dict[str, str]]:
     Returns a mapping of variable name -> dict[str, str].
     Ignores any non-literal entries and non-string values.
     """
-    result: Dict[str, Dict[str, str]] = {}
+    result: Dict[str, Dict[str, Any]] = {}
     try:
         tree = ast.parse(text)
     except Exception:
@@ -567,7 +605,7 @@ def _parse_dicts_from_python(text: str) -> Dict[str, Dict[str, str]]:
             if name in ['goat_names_dict', 'herd_profile']:
                 continue
 
-            mapping: Dict[str, str] = {}
+            mapping: Dict[str, Any] = {}
             for k_node, v_node in zip(node.value.keys, node.value.values):
                 # Handle different key types and value types
                 key_val = None
@@ -592,6 +630,19 @@ def _parse_dicts_from_python(text: str) -> Dict[str, Dict[str, str]]:
                             list_items.append(item.value)
                     if list_items:
                         val_val = ', '.join(list_items)
+                elif isinstance(v_node, ast.Dict):
+                    # {content, reply_relay} dict-form value (from a round-tripped export)
+                    d: Dict[str, str] = {}
+                    for kk_node, vv_node in zip(v_node.keys, v_node.values):
+                        if (
+                            isinstance(kk_node, ast.Constant)
+                            and isinstance(kk_node.value, str)
+                            and isinstance(vv_node, ast.Constant)
+                            and isinstance(vv_node.value, str)
+                        ):
+                            d[kk_node.value] = vv_node.value
+                    if isinstance(d.get("content"), str):
+                        val_val = d
 
                 if key_val is not None and val_val is not None:
                     mapping[key_val] = val_val
@@ -602,25 +653,38 @@ def _parse_dicts_from_python(text: str) -> Dict[str, Dict[str, str]]:
     return result
 
 
-def _normalize_templates_payload(data: Any) -> Dict[str, Dict[str, str]]:
-    """Normalize incoming data to {category: {key: content}} structure.
-    Accepts either that exact structure, or a Python-like dict-of-dicts mapping from file.
+def _content_and_reply_from_value(value: Any):
+    """Extract (content, reply_relay) from an import value (string or dict)."""
+    if isinstance(value, str):
+        return (value, None)
+    if isinstance(value, dict):
+        content = value.get("content")
+        if isinstance(content, str):
+            reply = value.get("reply_relay")
+            return (content, reply if isinstance(reply, str) and reply else None)
+    return None
+
+
+def _normalize_templates_payload(data: Any) -> Dict[str, Dict[str, Any]]:
+    """Normalize incoming data to {category: {key: value}}, where value is a
+    content string or a {content, reply_relay} dict. Malformed entries are
+    skipped (not rejected wholesale), so one bad row does not discard the file.
     """
-    if isinstance(data, dict):
-        # Values must be dicts; keys of inner dict can be str or int; values must be str
-        normalized: Dict[str, Dict[str, str]] = {}
-        for cat, mapping in data.items():
-            if not isinstance(cat, str) or not isinstance(mapping, dict):
-                return {}
-            inner: Dict[str, str] = {}
-            for kk, vv in mapping.items():
-                if isinstance(vv, str) and isinstance(kk, (str, int)):
-                    inner[str(kk)] = vv
-                else:
-                    return {}
+    if not isinstance(data, dict):
+        return {}
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for cat, mapping in data.items():
+        if not isinstance(cat, str) or not isinstance(mapping, dict):
+            continue
+        inner: Dict[str, Any] = {}
+        for kk, vv in mapping.items():
+            if not isinstance(kk, (str, int)):
+                continue
+            if _content_and_reply_from_value(vv) is not None:
+                inner[str(kk)] = vv
+        if inner:
             normalized[cat] = inner
-        return normalized
-    return {}
+    return normalized
 
 
 @cyberherd_messaging_api_router.post("/api/v1/templates/import_file")
@@ -675,14 +739,20 @@ async def api_import_file(
         if not isinstance(category, str):
             continue
         categories.add(category)
-        for key, content in mapping.items():
+        for key, value in mapping.items():
+            parsed = _content_and_reply_from_value(value)
+            if parsed is None:
+                continue
+            content, reply = parsed
             existing = await crud.get_message_template(user_id, category, key)
             if existing:
-                # update existing
-                await crud.update_message_template(user_id, category, key, content)
+                # Preserve the template's existing reply_relay when the import
+                # does not specify one, so re-importing does not wipe it.
+                effective_reply = reply if reply is not None else getattr(existing, "reply_relay", None)
+                await crud.update_message_template(user_id, category, key, content, effective_reply)
                 updated += 1
             else:
-                await crud.create_message_template(user_id, category, key, content)
+                await crud.create_message_template(user_id, category, key, content, reply)
                 created += 1
 
     return {"created": created, "updated": updated, "categories": sorted(list(categories))}
@@ -726,6 +796,7 @@ async def api_get_settings(wallet_info: WalletTypeInfo = Depends(require_invoice
     are scoped to the authenticated wallet's user, so an unauthenticated caller
     can no longer probe arbitrary keys or enumerate bunker status.
     """
+    await check_extension_enabled(wallet_info.wallet.user)
     return await _build_settings_response(wallet_info.wallet.user)
 
 

@@ -6,8 +6,14 @@ from .defaults import GOAT_NAMES_DICT
 def get_random_goat_names(goat_names_dict: dict = GOAT_NAMES_DICT):
     """Select random goat names from the dictionary."""
     keys = list(goat_names_dict.keys())
+    if not keys:
+        return []
     selected_keys = random.sample(keys, random.randint(1, len(keys)))
-    return [(key, goat_names_dict[key][0], goat_names_dict[key][1]) for key in selected_keys]
+    return [
+        (key, goat_names_dict[key][0], goat_names_dict[key][1])
+        for key in selected_keys
+        if isinstance(goat_names_dict.get(key), (list, tuple)) and len(goat_names_dict[key]) >= 2
+    ]
 
 
 def join_with_and(items: list[str]) -> str:

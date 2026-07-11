@@ -108,6 +108,11 @@ async def m004_add_reply_relay_column(db):
                 ADD COLUMN reply_relay TEXT;
                 """
             )
-        except Exception:
-            # Column likely already exists, ignore
-            pass
+        except Exception as exc:
+            # Only ignore "column already exists"; re-raise anything else so a
+            # real migration failure is not silently swallowed.
+            msg = str(exc).lower()
+            if "duplicate column" in msg or "already exists" in msg:
+                pass
+            else:
+                raise

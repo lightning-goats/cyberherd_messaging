@@ -129,10 +129,12 @@ async def test_publish_note_30311_reply(monkeypatch):
     assert result is True
     assert captured_args["kind"] == 1311
     tags = captured_args["tags"]
+    # NIP-53 live-chat reply: the 30311 address is the root (a-tag with relay
+    # hint + "root"); the specific message replied to is an "e" reply.
     a_entries = [tag for tag in tags if tag[0] == "a"]
-    assert a_entries == [("a", "30311:deadbeef:identifier")]
+    assert a_entries == [("a", "30311:deadbeef:identifier", "wss://relay.example.com", "root")]
     e_entries = [tag for tag in tags if tag[0] == "e"]
-    assert e_entries == [("e", "event123", "wss://relay.example.com", "root")]
+    assert e_entries == [("e", "event123", "wss://relay.example.com", "reply")]
 
 
 @pytest.mark.anyio
@@ -502,3 +504,66 @@ async def test_render_template_uses_authenticated_user_for_overrides(monkeypatch
 
     assert rendered == "Hello Alice"
     assert captured_user_ids == ["authenticated-user"]
+
+
+@pytest.mark.anyio
+async def test_headbutt_failure_fills_required_sats_placeholder():
+    """H2: default headbutt_failure templates use {required_sats}; it must be
+    filled, not left as a literal placeholder."""
+    import cyberherd_messaging.message_builder as mb
+    bundle = await mb.build_message(
+        "headbutt_failure",
+        cyber_herd_item={
+            "attacker_name": "Alice",
+            "attacker_amount": 100,
+            "victim_name": "Bob",
+            "victim_amount": 50,
+            "required_amount": 42,
+        },
+    )
+    assert "{required_sats}" not in bundle.nostr_content
+    assert "{required_amount}" not in bundle.nostr_content
+    assert "42" in bundle.nostr_content
+
+
+@pytest.mark.anyio
+async def test_goat_content_has_no_ptag_literal():
+    """H1: goat mentions must not embed a literal ' p-tag <hex>' in note bodies."""
+    import cyberherd_messaging.message_builder as mb
+    # sats_received substitutes {goat_name} with goat mentions.
+    for _ in range(10):
+        bundle = await mb.build_message("sats_received", new_amount=1000, difference=500)
+        assert "p-tag" not in bundle.nostr_content
+
+
+def test_normal_brace_template_is_not_discarded():
+    """M1: a normal template that starts/ends with a placeholder and contains a
+    colon must not be treated as a serialized dict and discarded."""
+    import re as _re
+    # Exercise the guard's regex directly (mirrors the services.py guard).
+    s = "{name}: joined the herd for {new_amount}"
+    looks_like_content_dict = (
+        s.startswith("{") and s.endswith("}")
+        and _re.search(r"""['"]content['"]\s*:""", s) is not None
+    )
+    assert looks_like_content_dict is False
+    # And a real serialized content dict is still caught.
+    s2 = "{'content': 'hi', 'reply_relay': 'wss://x'}"
+    caught = (
+        s2.startswith("{") and s2.endswith("}")
+        and _re.search(r"""['"]content['"]\s*:""", s2) is not None
+    )
+    assert caught is True
+
+
+@pytest.mark.anyio
+async def test_publish_note_refuses_empty_content(monkeypatch):
+    """M3: an empty note is never published (no-op success)."""
+    mock_enabled = AsyncMock(return_value=True)
+    monkeypatch.setattr("cyberherd_messaging.services.is_nostr_publishing_enabled", mock_enabled)
+    mock_bunker = AsyncMock(return_value=True)
+    monkeypatch.setattr("cyberherd_messaging.services._try_bunker_sign_and_publish", mock_bunker)
+
+    result = await services.publish_note("   ", wallet_id=MOCK_WALLET_ID)
+    assert result is True
+    assert not mock_bunker.called

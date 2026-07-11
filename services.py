@@ -44,6 +44,15 @@ class _SafeFormatter(string.Formatter):
 _safe_fmt = _SafeFormatter()
 
 
+def _unescape_common(text: str) -> str:
+    """Unescape common backslash sequences without corrupting UTF-8/emoji.
+
+    ``unicode_escape`` mangles multibyte characters (templates contain ⚡/🎉),
+    so only translate the handful of sequences template content actually uses.
+    """
+    return text.replace("\\n", "\n").replace("\\t", "\t").replace("\\r", "\r")
+
+
 def normalize_relay_hint(raw: str | None) -> str | None:
     """Normalize a raw relay string into a websocket URL or return None.
 
@@ -68,30 +77,38 @@ def normalize_relay_hint(raw: str | None) -> str | None:
 
 
 async def _is_nostrclient_available() -> bool:
-    """Private helper: check if nostrclient extension is importable (cached).
-    
+    """Private helper: check if nostrclient extension is importable.
+
+    Only a *positive* result is cached. A negative result (nostrclient not yet
+    importable, e.g. during startup ordering) is NOT cached, so availability is
+    re-evaluated on the next call and self-heals — otherwise a transient early
+    failure would disable publishing until the process restarts.
+
     Returns:
         True if nostrclient is available, False otherwise.
     """
     global _nostrclient_available
-    if _nostrclient_available is not None:
-        return _nostrclient_available
+    if _nostrclient_available:
+        return True
 
     async with _get_nostrclient_check_lock():
-        if _nostrclient_available is not None:
-            return _nostrclient_available
+        if _nostrclient_available:
+            return True
 
         try:
             from lnbits.extensions.nostrclient.router import nostr_client  # type: ignore
 
-            _nostrclient_available = nostr_client is not None
+            available = nostr_client is not None
         except Exception as exc:  # pragma: no cover - optional dependency path
-            _nostrclient_available = False
+            available = False
             logger.warning(
-                "cyberherd_messaging: nostrclient extension unavailable, disabling nostr publishing (%s)",
+                "cyberherd_messaging: nostrclient extension not available yet (%s)",
                 exc,
             )
-        return _nostrclient_available
+
+        if available:
+            _nostrclient_available = True
+        return available
 
 
 async def _try_bunker_sign_and_publish(
@@ -351,6 +368,13 @@ async def publish_note(
         )
         return False
 
+    # Never publish an empty note. This can happen when a template was discarded
+    # (e.g. a serialized content dict) or an unknown event fell back to empty
+    # content; publishing an empty kind-1 note would be noise.
+    if not (content or "").strip():
+        logger.warning("cyberherd_messaging: refusing to publish empty note content")
+        return True
+
     # Merge convenience tags with NIP-10 markers and deduplication
     all_tags: list[tuple[str, ...]] = []
     seen_tags: set[tuple[str, ...]] = set()
@@ -388,7 +412,12 @@ async def publish_note(
     # Normalize reply_relay once for use when embedding relay hints into e-tags
     normalized_reply = normalize_relay_hint(reply_relay)
 
-    if reply_to_30311_event:
+    # A live-chat reply (kind 1311) is present when we have a 30311 a-tag; in
+    # that case the a-tag is the NIP-53 root and the specific message being
+    # replied to is an "e" reply (not a second root).
+    is_live_reply = bool(reply_to_30311_a_tag)
+
+    if reply_to_30311_event and not is_live_reply:
         _append_unique(normalized_e_ids, reply_to_30311_event)
 
     for p_id in p_tags or []:
@@ -404,10 +433,27 @@ async def publish_note(
         else:
             logger.debug(f"Invalid pubkey in p_tags, skipping: {p_id[:20] if len(p_id) > 20 else p_id}")
 
-    if normalized_e_ids:
-        relay_hint = normalized_reply or ""
+    relay_hint = normalized_reply or ""
+
+    if is_live_reply:
+        # NIP-53 live chat: root is the "a" tag (30311:<pubkey>:<d>), the direct
+        # parent is the "e" reply, and any other e_tags are mentions.
+        a_candidate = (
+            reply_to_30311_a_tag.strip()
+            if isinstance(reply_to_30311_a_tag, str)
+            else None
+        )
+        if a_candidate:
+            _add_tag(("a", a_candidate, relay_hint, "root"))
+        reply_ev = (reply_to_30311_event or "").strip()
+        if reply_ev:
+            _add_tag(("e", reply_ev, relay_hint, "reply"))
+        for e_id in normalized_e_ids:
+            if e_id != reply_ev:
+                _add_tag(("e", e_id, "", "mention"))
+    elif normalized_e_ids:
         root_id = normalized_e_ids[0]
-        
+
         # NIP-10 compliance: For direct replies to root (single event id),
         # use only "root" marker. For replies with intermediate events,
         # mark first as "root" and direct parent as "reply".
@@ -419,7 +465,7 @@ async def publish_note(
             _add_tag(("e", root_id, relay_hint, "root"))
             reply_id = normalized_e_ids[1]
             _add_tag(("e", reply_id, relay_hint, "reply"))
-            
+
             # Additional events are mentions
             for e_id in normalized_e_ids[2:]:
                 _add_tag(("e", e_id, "", "mention"))
@@ -428,10 +474,7 @@ async def publish_note(
     for p_id in validated_p_ids:
         _add_tag(("p", p_id))
 
-    if reply_to_30311_a_tag:
-        candidate = reply_to_30311_a_tag.strip() if isinstance(reply_to_30311_a_tag, str) else None
-        if candidate:
-            _add_tag(("a", candidate))
+    # (The 30311 "a" root tag, when present, is added in the live-reply branch above.)
 
     # --- Sign via nsec_oracle and publish ---
     formatted_tags = []
@@ -724,10 +767,7 @@ async def render_and_publish_template(
             if m:
                 r = m.group(1)
                 # Unescape common sequences like \n
-                try:
-                    r = bytes(r, "utf-8").decode("unicode_escape")
-                except Exception:
-                    pass
+                r = _unescape_common(r)
 
             m2 = re.search(r"['\"]reply_relay['\"]\s*:\s*['\"](.*?)['\"]\s*(?:,|})", s, flags=re.DOTALL)
             rr = m2.group(1) if m2 else None
@@ -745,10 +785,7 @@ async def render_and_publish_template(
             if m_loose:
                 candidate = m_loose.group(2)
                 if candidate:
-                    try:
-                        candidate = bytes(candidate, "utf-8").decode("unicode_escape")
-                    except Exception:
-                        pass
+                    candidate = _unescape_common(candidate)
                     r2 = candidate.strip()
 
             rr2 = None
@@ -760,14 +797,20 @@ async def render_and_publish_template(
         except Exception:
             pass
 
-        # Nothing matched. If the raw string looks like a dict (e.g. "{...:...}")
-        # we should NOT publish it verbatim as kind=1 content. Return an empty
-        # content string and log a warning so callers avoid creating non-compliant
-        # notes. Otherwise return the raw string.
-        looks_like_dict = s.startswith("{") and s.endswith("}") and ":" in s
-        if looks_like_dict:
+        # Nothing matched. Only discard the string if it looks like a serialized
+        # *content dict* (a legacy stored form with a quoted "content" key) that
+        # we failed to parse — publishing that verbatim would leak raw structured
+        # data. A normal template that merely starts/ends with a {placeholder} and
+        # contains a colon (e.g. "{name}: joined for {new_amount}") must NOT be
+        # discarded.
+        looks_like_content_dict = (
+            s.startswith("{")
+            and s.endswith("}")
+            and re.search(r"""['"]content['"]\s*:""", s) is not None
+        )
+        if looks_like_content_dict:
             logger.warning(
-                "cyberherd_messaging: template content appears to be a serialized dict and was discarded to avoid publishing raw structured data: %s",
+                "cyberherd_messaging: template content appears to be a serialized content dict and was discarded to avoid publishing raw structured data: %s",
                 (s[:200] + "...") if len(s) > 200 else s,
             )
             return ("", None)
