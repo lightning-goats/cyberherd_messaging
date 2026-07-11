@@ -24,6 +24,8 @@ from .defaults import (
     HEADBUTT_FAILURE,
     HEADBUTT_INFO,
     HEADBUTT_SUCCESS,
+    JOIN_BELOW_MINIMUM,
+    REPOST_DISPLACES,
     MEMBER_INCREASE,
     SATS_RECEIVED,
     THANK_YOU_VARIATIONS,
@@ -607,6 +609,51 @@ async def build_message(
             victim_amount=victim_amount,
             required_amount=required_amount,
             required_sats=required_amount,
+        )
+        return MessageBundle(nostr_content=nostr_content, websocket_content=websocket_content)
+
+    if event_type == "join_below_minimum":
+        # A free spot exists but the contribution is below the join minimum.
+        template = _pick_template(_pool("join_below_minimum", JOIN_BELOW_MINIMUM))
+        display_name = ch_item.get("attacker_name") or ch_item.get("display_name", "Anon")
+        pub_key = ch_item.get("attacker_pubkey") or ch_item.get("pubkey", "")
+        nprofile = _normalize_nprofile(ch_item.get("attacker_nprofile") or ch_item.get("nprofile"))
+        nostr_name = format_nostr_pubkey(pub_key) or nprofile or display_name
+        attacker_amount = ch_item.get("attacker_amount", 0)
+        required_sats = ch_item.get("required_sats", ch_item.get("required_amount", 0))
+        difference = ch_item.get("difference", 0)
+
+        nostr_content = _format_template(
+            template, name=nostr_name, attacker_name=nostr_name,
+            attacker_amount=attacker_amount, required_sats=required_sats,
+            required_amount=required_sats, difference=difference,
+        )
+        nostr_content = _strip_promotional_link(nostr_content, is_30311_reply=is_30311_reply)
+        websocket_content = _format_template(
+            template, name=display_name, attacker_name=display_name,
+            attacker_amount=attacker_amount, required_sats=required_sats,
+            required_amount=required_sats, difference=difference,
+        )
+        return MessageBundle(nostr_content=nostr_content, websocket_content=websocket_content)
+
+    if event_type == "repost_displaces":
+        # A non-paying repost that displaced an existing member.
+        template = _pick_template(_pool("repost_displaces", REPOST_DISPLACES))
+        display_name = ch_item.get("attacker_name") or ch_item.get("display_name", "Anon")
+        pub_key = ch_item.get("attacker_pubkey") or ch_item.get("pubkey", "")
+        nprofile = _normalize_nprofile(ch_item.get("attacker_nprofile") or ch_item.get("nprofile"))
+        nostr_name = format_nostr_pubkey(pub_key) or nprofile or display_name
+        victim_display = ch_item.get("victim_name", "Anon")
+        victim_pubkey = ch_item.get("victim_pubkey", "")
+        victim_nprofile = _normalize_nprofile(ch_item.get("victim_nprofile"))
+        nostr_victim = format_nostr_pubkey(victim_pubkey) or victim_nprofile or victim_display
+
+        nostr_content = _format_template(
+            template, name=nostr_name, attacker_name=nostr_name, victim_name=nostr_victim,
+        )
+        nostr_content = _strip_promotional_link(nostr_content, is_30311_reply=is_30311_reply)
+        websocket_content = _format_template(
+            template, name=display_name, attacker_name=display_name, victim_name=victim_display,
         )
         return MessageBundle(nostr_content=nostr_content, websocket_content=websocket_content)
 

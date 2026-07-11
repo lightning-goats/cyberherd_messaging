@@ -154,6 +154,26 @@ SATS_RECEIVED = {
     "4": "⚡ CyberHerd grows: {new_amount} sats received. {difference_message} Goat trivia: {goat_name} exemplifies how goats use their prehensile tongues to selectively eat the most nutritious plants.\n\n https://lightning-goats.com\n\n"
 }
 
+# Rejection when a free spot exists but the contribution is below the join
+# minimum (no member is displaced — must not use "displace" wording).
+JOIN_BELOW_MINIMUM = {
+    "0": "⚡ CyberHerd ⚡: {name}'s contribution of {attacker_amount} sats is below the {required_sats} sats needed to join the herd. A little more will get you in!\n\n https://lightning-goats.com\n\n",
+    "1": "Almost there, {name}! Your {attacker_amount} sats fall short of the {required_sats} sats required to join the ⚡ CyberHerd ⚡ — {difference} more to go.\n\n https://lightning-goats.com\n\n",
+    "2": "The ⚡ CyberHerd ⚡ has an open spot, but requires at least {required_sats} sats to join. {name} contributed {attacker_amount} sats.\n\n https://lightning-goats.com\n\n",
+    "3": "So close, {name}! {difference} more sats and your {attacker_amount} sat contribution would clear the {required_sats} sat minimum to join the ⚡ CyberHerd ⚡.\n\n https://lightning-goats.com\n\n",
+    "4": "A minimum of {required_sats} sats is needed to join the ⚡ CyberHerd ⚡. {name}'s {attacker_amount} sats didn't quite reach it this time.\n\n https://lightning-goats.com\n\n",
+}
+
+# A non-paying repost that displaces an existing (repost/reaction) member.
+REPOST_DISPLACES = {
+    "0": "⚡ CyberHerd ⚡: {name} amplified our signal and joined the herd, displacing {victim_name}. Thanks for sharing!\n\n https://lightning-goats.com/leaderboard\n\n",
+    "1": "{name} reposted and took a spot in the ⚡ CyberHerd ⚡, bumping {victim_name}. Welcome aboard!\n\n https://lightning-goats.com/leaderboard\n\n",
+    "2": "A repost from {name} makes room in the ⚡ CyberHerd ⚡ — {victim_name} has been displaced. Thank you for spreading the word!\n\n https://lightning-goats.com/leaderboard\n\n",
+    "3": "The ⚡ CyberHerd ⚡ shifts: {name}'s repost earns them a place, displacing {victim_name}. Thanks for the boost!\n\n https://lightning-goats.com/leaderboard\n\n",
+    "4": "{name} spread the word and edged out {victim_name} to join the ⚡ CyberHerd ⚡. We appreciate the amplification!\n\n https://lightning-goats.com/leaderboard\n\n",
+}
+
+
 # Category name -> dict[key -> template]
 from typing import Any
 
@@ -175,4 +195,6 @@ SEED_DEFAULTS: dict[str, dict[str, Any]] = {
     "feeding_fallback_dict": FEEDING_FALLBACK,
     "interface_info_dict": INTERFACE_INFO,
     "sats_received_dict": SATS_RECEIVED,
+    "join_below_minimum": JOIN_BELOW_MINIMUM,
+    "repost_displaces": REPOST_DISPLACES,
 }
