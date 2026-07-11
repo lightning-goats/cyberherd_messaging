@@ -174,6 +174,30 @@ REPOST_DISPLACES = {
 }
 
 
+# An EXISTING herd member reposts again (kind 6). They already belong to the
+# herd, so this acknowledges the continued amplification rather than welcoming
+# them as a new join.
+EXISTING_MEMBER_REPOST = {
+    "0": "{name} boosted the ⚡ CyberHerd ⚡ signal again. Thanks for the continued amplification!\n\n https://lightning-goats.com/leaderboard\n\n",
+    "1": "Already riding with the ⚡ CyberHerd ⚡, {name} reposted once more. We appreciate you spreading the word!\n\n https://lightning-goats.com/leaderboard\n\n",
+    "2": "Another repost from {name} — thanks for keeping the ⚡ CyberHerd ⚡ signal strong!\n\n https://lightning-goats.com/leaderboard\n\n",
+    "3": "{name} is still amplifying the ⚡ CyberHerd ⚡. Thank you for the ongoing support!\n\n https://lightning-goats.com/leaderboard\n\n",
+    "4": "The ⚡ CyberHerd ⚡ grows louder — {name} shared us again. Much appreciated!\n\n https://lightning-goats.com/leaderboard\n\n",
+}
+
+
+# An EXISTING herd member reacts again (kind 7). They already belong to the
+# herd, so this thanks them for the continued support rather than welcoming
+# them as a new join.
+EXISTING_MEMBER_REACTION = {
+    "0": "{name} sent another positive reaction to the ⚡ CyberHerd ⚡. Thanks for the continued support!\n\n https://lightning-goats.com/leaderboard\n\n",
+    "1": "Already part of the ⚡ CyberHerd ⚡, {name} reacted again. We appreciate the encouragement!\n\n https://lightning-goats.com/leaderboard\n\n",
+    "2": "More love from {name} for the ⚡ CyberHerd ⚡. Thank you for the positive feedback!\n\n https://lightning-goats.com/leaderboard\n\n",
+    "3": "{name} keeps cheering on the ⚡ CyberHerd ⚡. Thanks for sticking with us!\n\n https://lightning-goats.com/leaderboard\n\n",
+    "4": "A returning reaction from {name} — the ⚡ CyberHerd ⚡ appreciates the ongoing support!\n\n https://lightning-goats.com/leaderboard\n\n",
+}
+
+
 # Category name -> dict[key -> template]
 from typing import Any
 
@@ -197,4 +221,6 @@ SEED_DEFAULTS: dict[str, dict[str, Any]] = {
     "sats_received_dict": SATS_RECEIVED,
     "join_below_minimum": JOIN_BELOW_MINIMUM,
     "repost_displaces": REPOST_DISPLACES,
+    "existing_member_repost": EXISTING_MEMBER_REPOST,
+    "existing_member_reaction": EXISTING_MEMBER_REACTION,
 }

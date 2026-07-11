@@ -26,6 +26,8 @@ from .defaults import (
     HEADBUTT_SUCCESS,
     JOIN_BELOW_MINIMUM,
     REPOST_DISPLACES,
+    EXISTING_MEMBER_REPOST,
+    EXISTING_MEMBER_REACTION,
     MEMBER_INCREASE,
     SATS_RECEIVED,
     THANK_YOU_VARIATIONS,
@@ -655,6 +657,24 @@ async def build_message(
         websocket_content = _format_template(
             template, name=display_name, attacker_name=display_name, victim_name=victim_display,
         )
+        return MessageBundle(nostr_content=nostr_content, websocket_content=websocket_content)
+
+    if event_type in {"existing_member_repost", "existing_member_reaction"}:
+        # An EXISTING herd member reposted/reacted again. Acknowledge the
+        # continued support — do NOT welcome them as a new join.
+        if event_type == "existing_member_repost":
+            template = _pick_template(_pool("existing_member_repost", EXISTING_MEMBER_REPOST))
+        else:
+            template = _pick_template(_pool("existing_member_reaction", EXISTING_MEMBER_REACTION))
+        display_name = ch_item.get("member_name") or ch_item.get("display_name", "Anon")
+        pub_key = ch_item.get("member_pubkey") or ch_item.get("pubkey", "")
+        nprofile = _normalize_nprofile(ch_item.get("member_nprofile") or ch_item.get("nprofile"))
+        nostr_name = format_nostr_pubkey(pub_key) or nprofile or display_name
+        new_total = ch_item.get("new_total", ch_item.get("amount", 0))
+
+        nostr_content = _format_template(template, name=nostr_name, new_total=new_total)
+        nostr_content = _strip_promotional_link(nostr_content, is_30311_reply=is_30311_reply)
+        websocket_content = _format_template(template, name=display_name, new_total=new_total)
         return MessageBundle(nostr_content=nostr_content, websocket_content=websocket_content)
 
     if event_type == "cyber_herd_treats":
