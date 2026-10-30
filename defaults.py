@@ -242,3 +242,47 @@ SEED_DEFAULTS: dict[str, dict[str, Any]] = {
     "existing_member_reaction": EXISTING_MEMBER_REACTION,
     "call_to_action": CALL_TO_ACTION,
 }
+
+
+# Seed data only: durable messages are selected from the database, never from
+# these dictionaries at publication time. Existing user rows are preserved.
+SKIPPED_TREATS = {
+    "0": "🐐 The big goats ate all the food this round, {name}! Your ⚡ CyberHerd ⚡ share was too small to send this time.",
+    "1": "🐐 The big goats reached the treat bucket first, {name}! Your ⚡ CyberHerd ⚡ share was too small for a payment this round.",
+    "2": "🐐 The big goats gobbled up this round's treats, {name}! Your ⚡ CyberHerd ⚡ slice was too small to send this time.",
+    "3": "🐐 A few hungry goats beat you to the trough, {name}! Your ⚡ CyberHerd ⚡ share didn't reach the minimum needed to send a treat this round.",
+    "4": "🐐 The big goats licked the bowl clean, {name}! Your ⚡ CyberHerd ⚡ share was too small to send in this distribution.",
+    "5": "🐐 The biggest appetites got the bites this round, {name}! Your ⚡ CyberHerd ⚡ share was below the amount we could send as a treat.",
+}
+SKIPPED_TREATS = {
+    key: content + "\n\n https://lightning-goats.com/leaderboard"
+    for key, content in SKIPPED_TREATS.items()
+}
+SEED_DEFAULTS["cyber_herd_no_treats"] = SKIPPED_TREATS
+SEED_DEFAULTS["cyber_herd_treats"] = {
+    **CYBER_HERD_TREATS,
+    "treat_0": "🍬 Treats delivered! {name} received {new_amount:g} sats from the ⚡ CyberHerd ⚡. A little something for your side of the trough!\n\n https://lightning-goats.com/leaderboard",
+    "treat_1": "🐐 {name} got a bite of this round's treats: {new_amount:g} sats from the ⚡ CyberHerd ⚡ have landed in your wallet!\n\n https://lightning-goats.com/leaderboard",
+    "treat_2": "⚡ CyberHerd ⚡ snack delivery for {name}! {new_amount:g} sats received — the big goats left you a bite this time. 🍬\n\n https://lightning-goats.com/leaderboard",
+    "treat_3": "🐐 A share of the treat bucket made it to {name}! {new_amount:g} sats received from this ⚡ CyberHerd ⚡ distribution.\n\n https://lightning-goats.com/leaderboard",
+    "treat_4": "🍬 Your place at the trough paid off, {name}! The ⚡ CyberHerd ⚡ sent {new_amount:g} sats your way. Thanks for running with the herd!\n\n https://lightning-goats.com/leaderboard",
+    "treat_5": "🐐 The ⚡ CyberHerd ⚡ shared its snacks with {name}: {new_amount:g} sats delivered! Enjoy your bite of this round's treats.\n\n https://lightning-goats.com/leaderboard",
+}
+SEED_DEFAULTS["member_thread"] = {
+    "0": "🐐 {name}, this is your CyberHerd member thread for this membership cycle. Treat updates will appear here.",
+}
+SEED_DEFAULTS["repost_hint"] = {
+    "0": "A repost adds 3 points and could help you snag a bigger bite next round. 🍬",
+    "1": "Want a bigger bite? Your first repost this cycle adds 3 points to your share. 🐐",
+    "2": "A repost earns 3 points once this cycle and could help you reach the treat bucket next time. 🍬",
+}
+SEED_DEFAULTS["feeder_batch_summary"] = {
+    "0": "This payment funds {feedings} feeder activation(s) and {payout_cycles} CyberHerd payout cycle(s).",
+    "1": "On the menu: {feedings} feeder activation(s) and {payout_cycles} CyberHerd payout cycle(s) from this payment.",
+}
+
+# Specialised membership messages must also be editable database templates.
+from .templates import messaging_templates as _specialised
+for _category in ("kind_6_repost", "kind_7_reaction", "kind_6_headbutt_failure",
+                  "kind_7_headbutt_failure", "zapper_displaces_kind_6", "zapper_displaces_kind_7"):
+    SEED_DEFAULTS[_category] = getattr(_specialised, _category)

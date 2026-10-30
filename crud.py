@@ -176,3 +176,66 @@ async def delete_user_setting(user_id: str, key: str) -> None:
         "DELETE FROM cyberherd_messaging.user_settings WHERE user_id = :user_id AND key = :key",
         {"user_id": user_id, "key": key},
     )
+
+
+async def ensure_default_templates(user_id: str, *, database=None):
+    """Seed missing message rows once per owner, preserving edits and deletions."""
+    from .defaults import SEED_DEFAULTS
+
+    database = database or db
+    schema = database.references_schema
+    marker = "member_message_templates_v1"
+    existing = await database.fetchone(
+        f"SELECT value FROM {schema}user_settings WHERE user_id=:uid AND key=:key",
+        {"uid": user_id, "key": marker},
+    )
+    if existing:
+        return
+    # Preserve any templates imported under the earlier, separate skipped category.
+    await database.execute(
+        f"""INSERT INTO {schema}message_templates
+        (user_id,category,key,content,reply_relay)
+        SELECT user_id,'cyber_herd_no_treats','legacy_' || key,content,reply_relay
+        FROM {schema}message_templates WHERE user_id=:uid
+        AND category='cyber_herd_treats_skipped' ON CONFLICT DO NOTHING""",
+        {"uid": user_id},
+    )
+    import json
+
+    rows = await database.fetchall(
+        f"SELECT DISTINCT category FROM {schema}message_templates WHERE user_id=:uid",
+        {"uid": user_id},
+    )
+    categories = {row["category"] for row in rows}
+    aliases = {
+        "cyber_herd_join": "cyber_herd",
+        "feeder_trigger_dict": "feeder_trigger",
+        "daily_reset_dict": "herd_reset_message",
+        "interface_info_dict": "interface_info",
+        "sats_received_dict": "sats_received",
+    }
+    for category, templates in SEED_DEFAULTS.items():
+        if aliases.get(category) in categories:
+            continue
+        for key, entry in templates.items():
+            content = entry.get("content", "") if isinstance(entry, dict) else entry
+            relay = entry.get("reply_relay") if isinstance(entry, dict) else None
+            if not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False)
+            await database.execute(
+                f"""INSERT INTO {schema}message_templates
+                (user_id,category,key,content,reply_relay) VALUES (:uid,:category,:key,:content,:relay)
+                ON CONFLICT (user_id,category,key) DO NOTHING""",
+                {
+                    "uid": user_id,
+                    "category": category,
+                    "key": str(key),
+                    "content": content,
+                    "relay": relay,
+                },
+            )
+    await database.execute(
+        f"""INSERT INTO {schema}user_settings (user_id,key,value) VALUES (:uid,:key,'1')
+        ON CONFLICT (user_id,key) DO NOTHING""",
+        {"uid": user_id, "key": marker},
+    )

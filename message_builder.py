@@ -368,6 +368,7 @@ async def build_message(
     reply_to_30311_event: Optional[str] = None,
     reply_to_30311_a_tag: Optional[str] = None,
     template_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
+    require_templates: bool = False,
 ) -> MessageBundle:
     """
     Build nostr and websocket message content mirroring middleware/messaging.py behaviour.
@@ -384,6 +385,8 @@ async def build_message(
         'sats_received_dict' or 'daily_reset_dict' are matched.
         """
         if not template_overrides:
+            if require_templates:
+                raise LookupError(f"No stored template pool for {name}")
             return default
 
         candidates = [
@@ -396,6 +399,8 @@ async def build_message(
             if key in template_overrides and template_overrides[key]:
                 return template_overrides[key]
 
+        if require_templates:
+            raise LookupError(f"No stored template pool for {name}")
         # fallback to default pool
         return default
 
@@ -751,7 +756,7 @@ async def build_message(
 
         # Interface information (status/help text)
         if event_type == "interface_info":
-            tpl_pool = getattr(TEMPLATES, "interface_info", None)
+            tpl_pool = _pool("interface_info", getattr(TEMPLATES, "interface_info", None))
             if tpl_pool is None:
                 logger.warning("message_builder: interface_info templates missing")
                 fallback = json.dumps({"event": event_type, "payload": ch_item}, ensure_ascii=False)
@@ -766,7 +771,7 @@ async def build_message(
         # Repost / reaction joins (kind_6_repost, kind_7_reaction)
         if event_type in {"kind_6_repost", "kind_7_reaction"}:
             pool_name = "kind_6_repost" if event_type == "kind_6_repost" else "kind_7_reaction"
-            tpl_pool = getattr(TEMPLATES, pool_name, None)
+            tpl_pool = _pool(pool_name, getattr(TEMPLATES, pool_name, None))
             if tpl_pool is None:
                 logger.warning("message_builder: %s templates missing", pool_name)
                 fallback = json.dumps({"event": event_type, "payload": ch_item}, ensure_ascii=False)
@@ -799,7 +804,7 @@ async def build_message(
         # Headbutt failure for reposts/reactions (specialised messages)
         if event_type in {"kind_6_headbutt_failure", "kind_7_headbutt_failure"}:
             pool_name = "kind_6_headbutt_failure" if event_type == "kind_6_headbutt_failure" else "kind_7_headbutt_failure"
-            tpl_pool = getattr(TEMPLATES, pool_name, None)
+            tpl_pool = _pool(pool_name, getattr(TEMPLATES, pool_name, None))
             if tpl_pool is None:
                 logger.warning("message_builder: %s templates missing", pool_name)
                 fallback = json.dumps({"event": event_type, "payload": ch_item}, ensure_ascii=False)
@@ -863,7 +868,7 @@ async def build_message(
         # Zapper displaces repost/reaction (paid zap displaces non-paid entries)
         if event_type in {"zapper_displaces_kind_6", "zapper_displaces_kind_7"}:
             pool_name = "zapper_displaces_kind_6" if event_type == "zapper_displaces_kind_6" else "zapper_displaces_kind_7"
-            tpl_pool = getattr(TEMPLATES, pool_name, None)
+            tpl_pool = _pool(pool_name, getattr(TEMPLATES, pool_name, None))
             if tpl_pool is None:
                 logger.warning("message_builder: %s templates missing", pool_name)
                 fallback = json.dumps({"event": event_type, "payload": ch_item}, ensure_ascii=False)

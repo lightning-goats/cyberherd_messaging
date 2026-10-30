@@ -116,6 +116,7 @@ async def _try_bunker_sign_and_publish(
     content: str,
     kind: int,
     tags: list[list[str]],
+    *, receipt=None, persist_signed=None,
 ) -> bool:
     """Sign an event via nsec_oracle and publish to relays.
 
@@ -147,6 +148,13 @@ async def _try_bunker_sign_and_publish(
         logger.warning("cyberherd_messaging: bunker sign_event error ({}): {}", type(exc).__name__, exc)
         return False
 
+    # Persist before relay submission. Retrying this exact signed event retains
+    # its Nostr ID even when a connection fails after accepting the submission.
+    if persist_signed is not None:
+        await persist_signed(signed)
+    if receipt is not None:
+        receipt["event_id"] = signed["id"]
+
     # Publish the signed event dict via nostrclient relay_manager
     try:
         from lnbits.extensions.nostrclient.router import nostr_client
@@ -157,6 +165,8 @@ async def _try_bunker_sign_and_publish(
 
         wire_msg = json.dumps(["EVENT", signed])
         nostr_client.relay_manager.publish_message(wire_msg)
+        if receipt is not None:
+            receipt["submitted"] = True
 
         event_id = signed.get("id", "")[:8]
         logger.info(
@@ -344,6 +354,8 @@ async def publish_note(
     reply_relay: str | None = None,
     user_id: str | None = None,
     wallet_id: str,
+    receipt: dict | None = None,
+    persist_signed=None,
 ) -> bool:
     """Publish a nostr note via nsec_oracle signing only.
 
@@ -491,8 +503,13 @@ async def publish_note(
     )
     kind = 1311 if has_30311_tags else 1
 
+    options = {}
+    if receipt is not None:
+        options["receipt"] = receipt
+    if persist_signed is not None:
+        options["persist_signed"] = persist_signed
     bunker_ok = await _try_bunker_sign_and_publish(
-        wallet_id, content, kind, formatted_tags
+        wallet_id, content, kind, formatted_tags, **options
     )
     if bunker_ok:
         return True
@@ -1051,7 +1068,9 @@ async def render_and_publish_template(
     )
 
 
-async def _load_template_overrides(user_id: Optional[str]) -> dict[str, dict[str, Any]]:
+async def _load_template_overrides(
+    user_id: Optional[str], *, strict=False
+) -> dict[str, dict[str, Any]]:
     """Fetch message templates from DB and assemble into a mapping suitable
     for passing into `build_message(..., template_overrides=...)`.
 
@@ -1095,9 +1114,17 @@ async def _load_template_overrides(user_id: Optional[str]) -> dict[str, dict[str
 
         for r in user_rows:
             _assign(r)
+        for legacy, canonical in (
+            ("cyber_herd", "cyber_herd_join"),
+            ("herd_reset_message", "daily_reset"),
+        ):
+            if combined.get(legacy):
+                combined[canonical] = combined[legacy]
 
         return combined
     except Exception:
+        if strict:
+            raise
         return {}
 
 
@@ -1112,14 +1139,23 @@ async def build_message_bundle(
     reply_to_30311_event: Optional[str] = None,
     reply_to_30311_a_tag: Optional[str] = None,
     user_id: Optional[str] = None,
+    require_database: bool = False,
 ) -> MessageBundle:
     """Expose middleware-equivalent message builder for other modules."""
     # Load DB template overrides when a user_id is provided (user-specific + global)
     template_overrides = {}
-    try:
-        template_overrides = await _load_template_overrides(user_id)
-    except Exception:
-        template_overrides = {}
+    if require_database:
+        from .crud import ensure_default_templates
+
+        if not user_id:
+            raise ValueError("A message owner is required")
+        await ensure_default_templates(user_id)
+        template_overrides = await _load_template_overrides(user_id, strict=True)
+    else:
+        try:
+            template_overrides = await _load_template_overrides(user_id)
+        except Exception:
+            template_overrides = {}
 
     return await _build_message(
         event_type,
@@ -1131,6 +1167,7 @@ async def build_message_bundle(
         reply_to_30311_event=reply_to_30311_event,
         reply_to_30311_a_tag=reply_to_30311_a_tag,
         template_overrides=template_overrides,
+        require_templates=require_database,
     )
 
 
@@ -1146,3 +1183,105 @@ __all__ = [
     "get_bunker_pubkey",
     "find_bunker_wallet",
 ]
+
+
+async def publish_signed_note(signed: dict, *, wallet_id: str, user_id: str) -> bool:
+    """Resubmit a validated, previously persisted event without signing again."""
+    if not await is_nostr_publishing_enabled(user_id):
+        return False
+    try:
+        from pynostr.event import Event
+        from lnbits.extensions.nostrclient.router import nostr_client
+
+        event = Event.from_dict(signed)
+        if not event.verify() or event.id != signed.get("id"):
+            return False
+        from lnbits.extensions.nsec_oracle.crud import get_keys, get_permissions
+
+        key_ids = {
+            key.id
+            for key in await get_keys(wallet_id)
+            if key.pubkey_hex == signed.get("pubkey")
+        }
+        permissions = await get_permissions(wallet_id)
+        if not any(
+            permission.key_id in key_ids
+            and permission.extension_id == "cyberherd_messaging"
+            and permission.kind == signed["kind"]
+            for permission in permissions
+        ):
+            return False
+        nostr_client.relay_manager.publish_message(json.dumps(["EVENT", signed]))
+        return True
+    except Exception:
+        logger.warning("cyberherd_messaging: saved event resubmission failed")
+        return False
+
+
+async def render_member_message(event_type, values, pubkey, user_id, nudge=False):
+    """Render durable member notices using this extension's user templates."""
+
+    # NIP-27 mention plus a p tag in the publisher; retain the human-readable name.
+    from bech32 import bech32_encode, convertbits
+
+    npub = bech32_encode("npub", convertbits(bytes.fromhex(pubkey), 8, 5))
+    mention = "nostr:" + npub
+    name = values.get("member_display_name") or values.get("name") or "Member"
+    data = {**values, "name": f"{name} ({mention})"}
+    if event_type in {
+        "cyber_herd_treats",
+        "cyber_herd_treats_skipped",
+        "member_thread",
+    }:
+        category = (
+            "cyber_herd_no_treats"
+            if event_type == "cyber_herd_treats_skipped"
+            else event_type
+        )
+        content = await render_stored_template(category, data, user_id)
+        if nudge:
+            content += "\n\n" + await render_stored_template(
+                "repost_hint", data, user_id
+            )
+        return content
+    bundle = await build_message_bundle(
+        event_type,
+        new_amount=values.get("new_amount", values.get("new_total", 0)),
+        difference=values.get("difference", 0),
+        spots_remaining=values.get("spots_remaining", 0),
+        cyber_herd_item={
+            **values.get("cyber_herd_item", {}),
+            "pubkey": pubkey,
+            "display_name": name,
+        },
+        user_id=user_id,
+        require_database=True,
+    )
+    content = bundle.nostr_content or bundle.websocket_content
+    if mention not in content:
+        content = f"{name} ({mention}) — {content}"
+    return content
+
+
+async def render_feeder_message(values, user_id):
+    """A single payment announcement using database-backed message wording."""
+    bundle = await build_message_bundle(
+        "feeder_triggered",
+        new_amount=values["new_amount"],
+        cyber_herd_item=values,
+        user_id=user_id,
+        require_database=True,
+    )
+    summary = await render_stored_template("feeder_batch_summary", values, user_id)
+    return (bundle.nostr_content or bundle.websocket_content) + "\n" + summary
+
+
+async def render_stored_template(category, values, user_id):
+    from random import choice
+    from .crud import ensure_default_templates, get_message_templates
+
+    await ensure_default_templates(user_id)
+    templates = await get_message_templates(user_id, category)
+    if not templates:
+        raise LookupError(f"No stored message templates for {category}")
+    return _safe_fmt.format(choice(templates).content, **values)

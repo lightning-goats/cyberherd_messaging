@@ -116,3 +116,16 @@ async def m004_add_reply_relay_column(db):
                 pass
             else:
                 raise
+
+
+async def m005_seed_member_message_templates(db):
+    """Install editable member notices for existing owners; new owners seed lazily."""
+    from .crud import ensure_default_templates
+
+    owners = await db.fetchall(
+        f"SELECT user_id FROM {db.references_schema}message_templates UNION "
+        f"SELECT user_id FROM {db.references_schema}user_settings"
+    )
+    for owner in owners:
+        if owner["user_id"]:
+            await ensure_default_templates(owner["user_id"], database=db)

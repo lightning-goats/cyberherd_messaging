@@ -34,6 +34,30 @@ A comprehensive messaging infrastructure extension for LNbits that provides dual
 - Content sanitization and validation
 - Goat profile integration with automatic p-tagging
 
+## Durable CyberHerd message templates
+
+Successful payouts reuse `cyber_herd_treats`, with six additional goat-themed
+variants. Shares too small to send use the separate `cyber_herd_no_treats` category
+with six variants. `repost_hint`, `member_thread`, and `feeder_batch_summary` hold
+optional hints, membership-thread anchors and per-payment feeding summaries.
+Member templates support `{name}` (including the Nostr mention), paid notices
+support `{new_amount}`, and summaries support `{feedings}` and `{payout_cycles}`.
+
+Migration 5 adds missing default rows for existing template owners. New owners
+are seeded on their first durable render. Existing custom content and category
+aliases are preserved; the completion marker prevents deliberately deleted
+variants from reappearing on every render. Template database failures leave the
+message queued rather than substituting hardcoded wording. Repost/reaction join
+messages also honor their database template overrides.
+
+`publish_note` accepts an optional receipt dictionary and asynchronous
+`persist_signed` callback. The callback runs before relay submission. A receipt
+marks actual submission only; disabled publishing does not invent an event ID.
+`publish_signed_note` resubmits a previously saved event after checking its
+signature, event ID, wallet key and current kind-specific permission. Callers
+retain the selected wording and signed event in their durable outbox so a retry
+cannot create a different public note.
+
 ## Installation
 
 This extension is designed to work with LNbits and requires the `nostrclient` extension for Nostr publishing functionality.
