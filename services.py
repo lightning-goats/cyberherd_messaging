@@ -1226,7 +1226,7 @@ async def render_member_message(event_type, values, pubkey, user_id, nudge=False
 
     npub = bech32_encode("npub", convertbits(bytes.fromhex(pubkey), 8, 5))
     mention = "nostr:" + npub
-    name = values.get("member_display_name") or values.get("name") or "Member"
+    name = values.get("member_display_name") or values.get("attacker_display_name") or values.get("name") or "Member"
     data = {**values, "name": f"{name} ({mention})"}
     if event_type in {
         "cyber_herd_treats",
@@ -1243,13 +1243,36 @@ async def render_member_message(event_type, values, pubkey, user_id, nudge=False
             content += "\n\n" + await render_stored_template(
                 "repost_hint", data, user_id
             )
-        return content
+        snapshot = values.get("score_breakdown")
+        if snapshot and event_type in {"cyber_herd_treats", "cyber_herd_treats_skipped"}:
+            basis = snapshot["minimum_sats"]
+            breakdown = await render_stored_template(
+                "cyber_herd_treat_breakdown",
+                {
+                    "zap_sats": snapshot["zap_sats"],
+                    "zap_points": format(10 * snapshot["zap_sats"] / basis, ".8g"),
+                    "repost_points": snapshot["repost_points"],
+                    "like_points": snapshot["like_points"],
+                    "total_points": format(snapshot["total_point_units"] / basis, ".8g"),
+                    "share_percent": format(snapshot["share_percent"], ".12f").rstrip("0").rstrip("."),
+                },
+                user_id,
+            )
+            # Keep the existing leaderboard link last, including for customised prose.
+            link = "https://lightning-goats.com/leaderboard"
+            before, found, after = content.partition(link)
+            if found:
+                content = (before.rstrip() + after).rstrip() + "\n\n" + breakdown + "\n\n" + link
+            else:
+                content += "\n\n" + breakdown
+        return await append_current_score(content, values, user_id)
     bundle = await build_message_bundle(
         event_type,
         new_amount=values.get("new_amount", values.get("new_total", 0)),
         difference=values.get("difference", 0),
         spots_remaining=values.get("spots_remaining", 0),
         cyber_herd_item={
+            **values,
             **values.get("cyber_herd_item", {}),
             "pubkey": pubkey,
             "display_name": name,
@@ -1260,20 +1283,77 @@ async def render_member_message(event_type, values, pubkey, user_id, nudge=False
     content = bundle.nostr_content or bundle.websocket_content
     if mention not in content:
         content = f"{name} ({mention}) — {content}"
+    return await append_current_score(content, values, user_id)
+
+
+def append_score_footer(content, footer):
+    """Place summaries before the existing leaderboard link."""
+    link = "https://lightning-goats.com/leaderboard"
+    before, found, after = content.partition(link)
+    if found:
+        return (before.rstrip() + after).rstrip() + "\n\n" + footer + "\n\n" + link
+    return content.rstrip() + "\n\n" + footer
+
+
+async def append_current_score(content, values, user_id):
+    snapshot = values.get("current_score")
+    if not snapshot:
+        return content
+    if snapshot.get("status") == "not_admitted":
+        footer = await render_stored_template("cyber_herd_unadmitted_score", {}, user_id)
+    else:
+        basis = snapshot["minimum_sats"]
+        data = {
+            "zap_sats": snapshot["zap_sats"],
+            "zap_points": format(10 * snapshot["zap_sats"] / basis, ".8g"),
+            "repost_points": snapshot["repost_points"],
+            "like_points": snapshot["like_points"],
+            "total_points": format(snapshot["total_point_units"] / basis, ".8g"),
+            "share_percent": format(snapshot["share_percent"], ".12f").rstrip("0").rstrip("."),
+        }
+        footer = await render_stored_template("cyber_herd_current_score", data, user_id)
+        if "earned_points" in snapshot:
+            gain = await render_stored_template(
+                "cyber_herd_interaction_score",
+                {"earned_points": format(snapshot["earned_points"], ".8g")}, user_id,
+            )
+            footer = gain + "\n\n" + footer
+    content = append_score_footer(content, footer)
+    if values.get("herd_capacity"):
+        content = await append_herd_capacity(content, values["herd_capacity"], user_id)
+    return content
+
+
+async def append_herd_capacity(content, values, user_id):
+    category = "cyber_herd_space_open" if values["spots_remaining"] else "cyber_herd_space_full"
+    return append_score_footer(content, await render_stored_template(category, values, user_id))
+
+
+async def render_stream_notice(event_type, values, user_id):
+    from .defaults import STREAM_CHAT_NOTICES
+
+    if event_type not in STREAM_CHAT_NOTICES:
+        raise ValueError("Unknown stream notice type")
+    content = await render_stored_template(event_type, values, user_id)
+    if event_type == "cyber_herd_invitation":
+        content = await append_herd_capacity(content, values, user_id)
     return content
 
 
 async def render_feeder_message(values, user_id):
     """A single payment announcement using database-backed message wording."""
-    bundle = await build_message_bundle(
-        "feeder_triggered",
-        new_amount=values["new_amount"],
-        cyber_herd_item=values,
-        user_id=user_id,
-        require_database=True,
-    )
+    content = await render_stored_template("feeder_command_accepted", values, user_id)
     summary = await render_stored_template("feeder_batch_summary", values, user_id)
-    return (bundle.nostr_content or bundle.websocket_content) + "\n" + summary
+    content = append_score_footer(content, summary)
+    if values.get("herd_score"):
+        snapshot = values["herd_score"]
+        footer = await render_stored_template(
+            "cyber_herd_feeder_score",
+            {**snapshot, "total_points": format(snapshot["total_points"], ".8g")},
+            user_id,
+        )
+        content = append_score_footer(content, footer)
+    return content
 
 
 async def render_stored_template(category, values, user_id):
@@ -1285,3 +1365,37 @@ async def render_stored_template(category, values, user_id):
     if not templates:
         raise LookupError(f"No stored message templates for {category}")
     return _safe_fmt.format(choice(templates).content, **values)
+
+
+async def sign_treat_zap_request(*, wallet_id, user_id, pubkey, name, amount_msat,
+                                lnurl, event_id=None, event_kind=1):
+    """Sign kind 9734 for an LNURL callback; never publish requests to relays."""
+    import time
+    from pynostr.event import Event
+    from lnbits.extensions.nsec_oracle.services import sign_event
+    from lnbits.extensions.nostrclient.crud import get_relays
+
+    if not wallet_id or not await is_nostr_publishing_enabled(user_id):
+        raise PermissionError("Zap request signing is disabled")
+    relays = sorted({r.url for r in await get_relays()
+                    if r.active and r.url and r.url.startswith(("wss://", "ws://"))})
+    if not relays:
+        raise LookupError("No active relays configured for zap receipts")
+    if not validate_pubkey_hex(pubkey) or amount_msat <= 0:
+        raise ValueError("Invalid zap recipient or amount")
+    tags = [["p", pubkey], ["amount", str(amount_msat)], ["lnurl", lnurl],
+            ["relays", *relays]]
+    if event_id:
+        if not validate_pubkey_hex(event_id):
+            raise ValueError("Invalid joining event ID")
+        tags.extend([["e", event_id], ["k", str(event_kind)]])
+    content = await render_stored_template(
+        "cyber_herd_zap_request", {"name": name, "new_amount": amount_msat / 1000}, user_id,
+    )
+    unsigned = {"kind": 9734, "created_at": int(time.time()), "tags": tags, "content": content}
+    signed = await sign_event(wallet_id, "cyberherd_messaging", unsigned)
+    event = Event.from_dict(signed)
+    if (not event.verify() or event.id != signed.get("id")
+            or any(signed.get(k) != v for k, v in unsigned.items())):
+        raise ValueError("Signer returned an invalid zap request")
+    return signed

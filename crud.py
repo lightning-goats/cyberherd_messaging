@@ -184,6 +184,10 @@ async def ensure_default_templates(user_id: str, *, database=None):
 
     database = database or db
     schema = database.references_schema
+    await ensure_stream_chat_templates(user_id, database=database)
+    await ensure_zap_request_template(user_id, database=database)
+    await ensure_context_summary_templates(user_id, database=database)
+    await ensure_treat_breakdown_template(user_id, database=database)
     marker = "member_message_templates_v1"
     existing = await database.fetchone(
         f"SELECT value FROM {schema}user_settings WHERE user_id=:uid AND key=:key",
@@ -233,6 +237,113 @@ async def ensure_default_templates(user_id: str, *, database=None):
                     "content": content,
                     "relay": relay,
                 },
+            )
+    await database.execute(
+        f"""INSERT INTO {schema}user_settings (user_id,key,value) VALUES (:uid,:key,'1')
+        ON CONFLICT (user_id,key) DO NOTHING""",
+        {"uid": user_id, "key": marker},
+    )
+
+
+async def ensure_treat_breakdown_template(user_id: str, *, database=None):
+    """Seed this addition once without restoring deleted or edited older templates."""
+    from .defaults import SEED_DEFAULTS
+
+    database = database or db
+    schema = database.references_schema
+    marker = "treat_breakdown_templates_v1"
+    if await database.fetchone(
+        f"SELECT value FROM {schema}user_settings WHERE user_id=:uid AND key=:key",
+        {"uid": user_id, "key": marker},
+    ):
+        return
+    for key, content in SEED_DEFAULTS["cyber_herd_treat_breakdown"].items():
+        await database.execute(
+            f"""INSERT INTO {schema}message_templates
+            (user_id,category,key,content) VALUES (:uid,:category,:key,:content)
+            ON CONFLICT (user_id,category,key) DO NOTHING""",
+            {"uid": user_id, "category": "cyber_herd_treat_breakdown",
+             "key": key, "content": content},
+        )
+    await database.execute(
+        f"""INSERT INTO {schema}user_settings (user_id,key,value) VALUES (:uid,:key,'1')
+        ON CONFLICT (user_id,key) DO NOTHING""",
+        {"uid": user_id, "key": marker},
+    )
+
+
+async def ensure_context_summary_templates(user_id: str, *, database=None):
+    """Install context-specific footers once; retain edits and intentional deletions."""
+    from .defaults import CONTEXT_SUMMARIES
+
+    database = database or db
+    schema = database.references_schema
+    marker = "context_summary_templates_v1"
+    if await database.fetchone(
+        f"SELECT value FROM {schema}user_settings WHERE user_id=:uid AND key=:key",
+        {"uid": user_id, "key": marker},
+    ):
+        return
+    for category, templates in CONTEXT_SUMMARIES.items():
+        for key, content in templates.items():
+            await database.execute(
+                f"""INSERT INTO {schema}message_templates
+                (user_id,category,key,content) VALUES (:uid,:category,:key,:content)
+                ON CONFLICT (user_id,category,key) DO NOTHING""",
+                {"uid": user_id, "category": category, "key": key, "content": content},
+            )
+    await database.execute(
+        f"""INSERT INTO {schema}user_settings (user_id,key,value) VALUES (:uid,:key,'1')
+        ON CONFLICT (user_id,key) DO NOTHING""",
+        {"uid": user_id, "key": marker},
+    )
+
+
+async def ensure_zap_request_template(user_id: str, *, database=None):
+    """Seed neutral zap request wording once, preserving custom edits and deletions."""
+    from .defaults import SEED_DEFAULTS
+
+    database = database or db
+    schema = database.references_schema
+    marker = "zap_request_templates_v1"
+    if await database.fetchone(
+        f"SELECT value FROM {schema}user_settings WHERE user_id=:uid AND key=:key",
+        {"uid": user_id, "key": marker},
+    ):
+        return
+    for key, content in SEED_DEFAULTS["cyber_herd_zap_request"].items():
+        await database.execute(
+            f"""INSERT INTO {schema}message_templates
+            (user_id,category,key,content) VALUES (:uid,:category,:key,:content)
+            ON CONFLICT (user_id,category,key) DO NOTHING""",
+            {"uid": user_id, "category": "cyber_herd_zap_request", "key": key, "content": content},
+        )
+    await database.execute(
+        f"""INSERT INTO {schema}user_settings (user_id,key,value) VALUES (:uid,:key,'1')
+        ON CONFLICT (user_id,key) DO NOTHING""",
+        {"uid": user_id, "key": marker},
+    )
+
+
+async def ensure_stream_chat_templates(user_id: str, *, database=None):
+    """Seed approved chat notices once; preserve custom wording and deletions."""
+    from .defaults import STREAM_CHAT_NOTICES
+
+    database = database or db
+    schema = database.references_schema
+    marker = "stream_chat_templates_v1"
+    if await database.fetchone(
+        f"SELECT value FROM {schema}user_settings WHERE user_id=:uid AND key=:key",
+        {"uid": user_id, "key": marker},
+    ):
+        return
+    for category, templates in STREAM_CHAT_NOTICES.items():
+        for key, content in templates.items():
+            await database.execute(
+                f"""INSERT INTO {schema}message_templates
+                (user_id,category,key,content) VALUES (:uid,:category,:key,:content)
+                ON CONFLICT (user_id,category,key) DO NOTHING""",
+                {"uid": user_id, "category": category, "key": key, "content": content},
             )
     await database.execute(
         f"""INSERT INTO {schema}user_settings (user_id,key,value) VALUES (:uid,:key,'1')

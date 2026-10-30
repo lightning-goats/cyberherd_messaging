@@ -286,3 +286,281 @@ from .templates import messaging_templates as _specialised
 for _category in ("kind_6_repost", "kind_7_reaction", "kind_6_headbutt_failure",
                   "kind_7_headbutt_failure", "zapper_displaces_kind_6", "zapper_displaces_kind_7"):
     SEED_DEFAULTS[_category] = getattr(_specialised, _category)
+
+SEED_DEFAULTS["cyber_herd_treat_breakdown"] = {
+    "0": "Your points this round:\n⚡ Zaps: {zap_sats} sats → {zap_points} points\n🔁 Repost: {repost_points} points\n❤️ Like: {like_points} points\nTotal: {total_points} points · Treat share: {share_percent}%",
+}
+
+
+CONTEXT_SUMMARIES = {
+    "cyber_herd_current_score": {
+        "0": "Your current points:\n⚡ Zaps: {zap_sats} sats → {zap_points} points\n🔁 Repost: {repost_points} points\n❤️ Like: {like_points} points\nTotal: {total_points} points · Current share: {share_percent}%\nShares can change before distribution.",
+    },
+    "cyber_herd_interaction_score": {
+        "0": "This interaction added {earned_points} points.",
+    },
+    "cyber_herd_unadmitted_score": {
+        "0": "This attempt did not earn membership points or a share. Qualifying likes and reposts can count after a later qualifying join.",
+    },
+    "cyber_herd_feeder_score": {
+        "0": "Herd snapshot: {active_members} active members · {total_points} total points\nMember allocation: {member_allocation}%\nShares can change before distribution.",
+    },
+}
+SEED_DEFAULTS.update(CONTEXT_SUMMARIES)
+
+
+SEED_DEFAULTS["cyber_herd_zap_request"] = {
+    "0": "🐐 CyberHerd treats for {name}: {new_amount:g} sats.",
+}
+
+
+STREAM_CHAT_NOTICES = {
+    "feeder_command_accepted": {
+        "0": "🐐 OpenHAB accepted a feeder command for this payment of {new_amount:g} sats. Physical food delivery has not been confirmed.",
+        "1": "🐐 A feeder command was accepted by OpenHAB after {new_amount:g} sats arrived. This confirms the command, not physical food delivery.",
+    },
+    "feeder_batch_finished": {
+        "0": "🐐 This payment's batch finished: {accepted_feedings} feeder command(s) accepted and {funding_cycles} CyberHerd funding transfer(s) completed. Physical food delivery is not confirmed; member treat notices follow settled payments.",
+    },
+    "feeder_outcome_uncertain": {
+        "0": "🐐 The latest feeder command's outcome is uncertain. Automatic replay is paused for operator reconciliation. Before this request: {accepted_feedings} command(s) accepted and {funding_cycles} CyberHerd funding transfer(s) completed. Physical food delivery is not confirmed.",
+    },
+    'feeder_requests_paused': {
+        '0': '🐐 The feeder is taking a little break. The goats will have to wait for their next round of snacks!',
+        '1': '🐐 Snack time is on hold—the feeder is paused for now. Zaps can still arrive while the treat chute takes a breather.',
+        '2': '🐐 A little pause at the trough! The feeder is resting, but you can still send zaps to the herd.',
+        '3': '🐐 The goats are saving their appetites. The feeder is paused; we’ll let you know when snack time is back.',
+        '4': '🐐 The treat chute is taking five. The feeder is paused for now, though zaps are still welcome.',
+        '5': '🐐 Hold those hungry headbutts—the feeder is on a break! The next round of snacks will have to wait.',
+    },
+    'feeder_requests_enabled': {
+        '0': '🐐 The feeder is back on the menu! Time to line up at the trough again.',
+        '1': '🐐 Snack time is back! The feeder has resumed, and the goats are keeping an eye on the treat chute.',
+        '2': '🐐 Break’s over at the trough. The feeder is ready for the next round of snacks!',
+        '3': '🐐 The feeder’s little rest is over. Let’s get those hungry goats back in line!',
+        '4': '🐐 Back to the snack business! The feeder is unpaused and the herd is all ears.',
+        '5': '🐐 The wait at the trough is over—the feeder is back in action. Who’s ready for the next bite?',
+    },
+    "cyber_herd_invitation": {
+        "0": "🐐 Want a place at the trough? Join the ⚡ CyberHerd ⚡ by supporting this stream. Qualifying zaps start at {minimum_sats} sats; a full herd may need a larger headbutt. Your first repost adds 3 points and first like adds 1, once per membership cycle. Zaps earn the most points and every settled zap counts. Members share {member_allocation}% of each treat distribution.\n\nhttps://lightning-goats.com/leaderboard",
+        "1": "🐐 Run with the ⚡ CyberHerd ⚡! Zap this stream to build your score. Qualifying zaps start at {minimum_sats} sats; headbutts may need more. First repost: 3 points. First like: 1 point. Each counts once per membership cycle; every settled zap adds points. The member treat pool is {member_allocation}%.\n\nhttps://lightning-goats.com/leaderboard",
+    },
+    "cyber_herd_space_open": {
+        "0": "Herd places: {active_members}/{max_members} filled · {spots_remaining} open. A first like or repost can join while a place is open.",
+    },
+    "cyber_herd_space_full": {
+        "0": "Herd places: {active_members}/{max_members} filled. Qualifying zaps can challenge members; reposts can challenge eligible social-only members. Likes cannot headbutt.",
+    },
+}
+SEED_DEFAULTS.update(STREAM_CHAT_NOTICES)
+
+
+LEGACY_FEEDER_AVAILABILITY_TEMPLATES = {'feeder_requests_paused': {'0': '🐐 Feeder requests are paused by the operator. Feeding will wait until the pause is lifted.', '1': '🐐 The operator has paused feeder requests. The goats will have to wait for their next round of snacks.'}, 'feeder_requests_enabled': {'0': '🐐 The operator pause is lifted. Feeder requests are enabled again.', '1': '🐐 Feeder requests are back on the menu: the operator has lifted the pause.'}}
+
+
+MESSAGE_VARIATIONS = {'cyber_herd_invitation': {'2': '🐐 There’s room for more enthusiasm at the trough! Support this '
+                                'stream to build your ⚡ CyberHerd ⚡ score. Qualifying zaps start '
+                                'at {minimum_sats} sats; a full herd may need more. Your first '
+                                'repost adds 3 points, your first like adds 1, and every settled '
+                                'zap adds points. The member treat pool is {member_allocation}%.\n'
+                                '\n'
+                                'https://lightning-goats.com/leaderboard',
+                           '3': '🐐 The goats have their snacks. Want a share of the CyberHerd '
+                                'treats? A minimum qualifying zap starts at {minimum_sats} sats, '
+                                'with higher zaps earning more points. First repost: 3 points. '
+                                'First like: 1 point, each once per membership cycle. Members '
+                                'share {member_allocation}% of each treat distribution; a full '
+                                'herd may need a bigger headbutt.\n'
+                                '\n'
+                                'https://lightning-goats.com/leaderboard',
+                           '4': '🐐 Bring some spark to the ⚡ CyberHerd ⚡! Qualifying zaps to this '
+                                'stream start at {minimum_sats} sats; headbutts can require more. '
+                                'Every settled zap adds points, plus 3 for your first repost and 1 '
+                                'for your first like this membership cycle. The herd’s members '
+                                'share {member_allocation}% of each treat distribution.\n'
+                                '\n'
+                                'https://lightning-goats.com/leaderboard',
+                           '5': '🐐 Fancy a place among the CyberHerd? Support this stream! '
+                                'Qualifying zaps start at {minimum_sats} sats, and every settled '
+                                'zap builds your score. Your first repost adds 3 points and first '
+                                'like adds 1 per membership cycle. A full herd may call for a '
+                                'larger headbutt. Members share a {member_allocation}% treat '
+                                'pool.\n'
+                                '\n'
+                                'https://lightning-goats.com/leaderboard',
+                           '6': '🐐 More cheering, more sharing! Build your ⚡ CyberHerd ⚡ score '
+                                'with zaps to this stream. Qualifying zaps start at {minimum_sats} '
+                                'sats; a full herd may need a larger headbutt. Add 3 points with '
+                                'your first repost and 1 with your first like, once each per '
+                                'membership cycle. Member treats come from {member_allocation}% of '
+                                'each distribution.\n'
+                                '\n'
+                                'https://lightning-goats.com/leaderboard',
+                           '7': '🐐 Pull up to the CyberHerd trough! Qualifying zaps start at '
+                                '{minimum_sats} sats, with every settled zap adding points. Your '
+                                'first repost earns 3 points and first like earns 1 this '
+                                'membership cycle. A full herd can require a bigger headbutt to '
+                                'join. The member treat bucket holds {member_allocation}% of each '
+                                'distribution.\n'
+                                '\n'
+                                'https://lightning-goats.com/leaderboard'},
+ 'feeder_command_accepted': {'2': '🐐 A request is on its way to the trough: OpenHAB accepted a '
+                                  'feeder command after {new_amount:g} sats arrived. Physical food '
+                                  'delivery is not confirmed.',
+                             '3': '🐐 {new_amount:g} sats brought a little excitement to the herd! '
+                                  'OpenHAB accepted the feeder command; physical food delivery is '
+                                  'not confirmed.',
+                             '4': '🐐 The treat chute has a request waiting: OpenHAB accepted a '
+                                  'feeder command for this {new_amount:g}-sat payment. That '
+                                  'confirms the command, not physical food delivery.',
+                             '5': '🐐 Heads up at the trough! After {new_amount:g} sats arrived, '
+                                  'OpenHAB accepted a feeder command. Physical food delivery has '
+                                  'not been confirmed.'},
+ 'feeder_batch_finished': {'1': '🐐 This round’s requests are wrapped up: {accepted_feedings} '
+                                'feeder command(s) accepted and {funding_cycles} CyberHerd funding '
+                                'transfer(s) completed. Physical food delivery is not confirmed; '
+                                'member treat notices follow settled payments.',
+                           '2': '🐐 Here’s the tally for this payment: {accepted_feedings} feeder '
+                                'command(s) accepted, with {funding_cycles} CyberHerd funding '
+                                'transfer(s) completed. Physical food delivery is not confirmed. '
+                                'Members get their treat notices as payments settle.',
+                           '3': '🐐 That’s this payment’s batch accounted for: {accepted_feedings} '
+                                'feeder command(s) accepted and {funding_cycles} CyberHerd funding '
+                                'transfer(s) completed. Physical food delivery is not confirmed; '
+                                'individual treat notices follow settlement.',
+                           '4': '🐐 The request tally is in! This payment finished with '
+                                '{accepted_feedings} accepted feeder command(s) and '
+                                '{funding_cycles} completed CyberHerd funding transfer(s). '
+                                'Physical food delivery remains unconfirmed. Member treats are '
+                                'announced when their payments settle.',
+                           '5': '🐐 A quick count from the trough: {accepted_feedings} feeder '
+                                'command(s) accepted; {funding_cycles} CyberHerd funding '
+                                'transfer(s) completed for this payment. That does not confirm '
+                                'physical food delivery. Member treat notices follow settled '
+                                'payments.'},
+ 'feeder_outcome_uncertain': {'0': '🐐 The feeder’s latest request needs a check before we try '
+                                   'again. So far: {accepted_feedings} command(s) accepted and '
+                                   '{funding_cycles} CyberHerd funding transfer(s) completed. We '
+                                   'can’t confirm what happened with the latest command or whether '
+                                   'food was dispensed.',
+                              '1': '🐐 A little uncertainty at the trough: we can’t confirm the '
+                                   'latest feeder command, so it won’t be repeated automatically. '
+                                   'Before it, {accepted_feedings} command(s) were accepted and '
+                                   '{funding_cycles} CyberHerd funding transfer(s) completed. '
+                                   'Physical food delivery is unconfirmed.',
+                              '2': '🐐 The treat chute’s latest request needs a closer look. '
+                                   'Automatic retries are on hold. Earlier in this payment’s '
+                                   'batch: {accepted_feedings} command(s) accepted and '
+                                   '{funding_cycles} CyberHerd funding transfer(s) completed. '
+                                   'Physical food delivery is not confirmed.',
+                              '3': '🐐 We’re holding the next headbutt while the latest feeder '
+                                   'request gets checked. Its outcome is unclear. Before this '
+                                   'request: {accepted_feedings} accepted command(s) and '
+                                   '{funding_cycles} completed CyberHerd funding transfer(s). '
+                                   'Physical food delivery is unconfirmed.',
+                              '4': '🐐 The latest feeder command left us guessing. It needs a check '
+                                   'before another attempt. So far this payment has '
+                                   '{accepted_feedings} earlier accepted command(s) and '
+                                   '{funding_cycles} completed CyberHerd funding transfer(s). We '
+                                   'can’t confirm physical food delivery.',
+                              '5': '🐐 A quick check is needed at the trough: the latest feeder '
+                                   'command’s outcome is unknown, and automatic replay is stopped. '
+                                   'Earlier totals: {accepted_feedings} command(s) accepted and '
+                                   '{funding_cycles} CyberHerd funding transfer(s) completed. '
+                                   'Physical food delivery is not confirmed.'},
+ 'member_thread': {'1': '🐐 {name}, here’s your own corner of the CyberHerd trough for this '
+                        'membership cycle. Watch this thread for your treat updates.',
+                   '2': '🐐 A little CyberHerd space for {name}! Your treat updates for this '
+                        'membership cycle will gather here.',
+                   '3': '🐐 {name}, keep an eye on this spot at the trough. This is your CyberHerd '
+                        'member thread for the current membership cycle.',
+                   '4': '🐐 This thread belongs to {name}’s CyberHerd adventures this membership '
+                        'cycle. Your treat updates will show up here.',
+                   '5': '🐐 Your CyberHerd noticeboard is ready, {name}. Treat updates for this '
+                        'membership cycle will appear in this thread.'},
+ 'cyber_herd_space_open': {'1': 'There’s space at the trough: {active_members}/{max_members} '
+                                'places filled, with {spots_remaining} open. A first like or '
+                                'repost can join while a place is open.',
+                           '2': 'The herd has {spots_remaining} open '
+                                'place(s)—{active_members}/{max_members} filled. A first like or '
+                                'repost can join while there’s space.',
+                           '3': 'A little room remains in the herd: {active_members}/{max_members} '
+                                'places filled · {spots_remaining} open. A first like or repost '
+                                'can join an open place.',
+                           '4': 'Places at the trough: {active_members}/{max_members} filled, '
+                                '{spots_remaining} open. First likes and reposts can join while '
+                                'space remains.',
+                           '5': 'The trough isn’t full yet: {active_members}/{max_members} places '
+                                'filled · {spots_remaining} open. A first like or repost can join '
+                                'while a place is open.'},
+ 'cyber_herd_space_full': {'1': 'The trough is full: {active_members}/{max_members} places filled. '
+                                'Qualifying zaps can headbutt; reposts can challenge eligible '
+                                'social-only members. Likes cannot headbutt.',
+                           '2': 'All {max_members} herd places are occupied '
+                                '({active_members}/{max_members}). Qualifying zaps can challenge '
+                                'members, and reposts can challenge eligible social-only members. '
+                                'Likes cannot headbutt.',
+                           '3': 'A full house at the trough: {active_members}/{max_members} places '
+                                'filled. A qualifying zap can challenge a member; a repost can '
+                                'challenge an eligible social-only member. A like cannot headbutt.',
+                           '4': 'No open herd places right now: {active_members}/{max_members} '
+                                'filled. Qualifying zaps and eligible repost headbutts can '
+                                'challenge for a place. Likes cannot headbutt.',
+                           '5': 'The herd has filled its places: {active_members}/{max_members}. '
+                                'Qualifying zaps can challenge members; reposts can challenge '
+                                'eligible social-only members. Likes need an open place and cannot '
+                                'headbutt.'},
+ 'feeder_batch_summary': {'2': 'This payment’s menu: {feedings} feeder activation(s) and '
+                               '{payout_cycles} CyberHerd payout cycle(s).',
+                          '3': 'The payment funds {feedings} feeder activation(s), alongside '
+                               '{payout_cycles} CyberHerd payout cycle(s).',
+                          '4': 'Planned for this payment: {feedings} feeder activation(s) · '
+                               '{payout_cycles} CyberHerd payout cycle(s).',
+                          '5': 'From this payment’s treat bucket: funding for {feedings} feeder '
+                               'activation(s) and {payout_cycles} CyberHerd payout cycle(s).'},
+ 'repost_hint': {'3': 'A first repost this membership cycle adds 3 points. It could help you reach '
+                      'a bigger bite next time. 🐐',
+                 '4': 'Still room to boost your score: your first repost this membership cycle is '
+                      'worth 3 points. 🐐',
+                 '5': 'Fancy a little more weight at the trough? A first repost this membership '
+                      'cycle adds 3 points. 🐐'},
+ 'cyber_herd_zap_request': {'1': '🐐 A little CyberHerd treat for {name}: {new_amount:g} sats.',
+                            '2': '🐐 From the CyberHerd treat bucket to {name}: {new_amount:g} '
+                                 'sats.',
+                            '3': '🐐 A share of the CyberHerd snacks for {name}: {new_amount:g} '
+                                 'sats.',
+                            '4': '🐐 CyberHerd snack time for {name}: {new_amount:g} sats.',
+                            '5': '🐐 A bite from the CyberHerd trough for {name}: {new_amount:g} '
+                                 'sats.'},
+ 'cyber_herd_interaction_score': {'1': 'Points added by this interaction: {earned_points}.',
+                                  '2': 'This bit of support contributed {earned_points} points.',
+                                  '3': 'This interaction’s contribution to your score: '
+                                       '{earned_points} points.'},
+ 'cyber_herd_unadmitted_score': {'1': 'No membership points or share were earned by this attempt. '
+                                      'Qualifying likes and reposts can still count after a later '
+                                      'qualifying join.',
+                                 '2': 'This attempt hasn’t earned a membership score or share. A '
+                                      'later qualifying join can bring your qualifying likes and '
+                                      'reposts into the tally.',
+                                 '3': 'This attempt didn’t earn membership points or a share. '
+                                      'Qualifying social support can contribute after a later '
+                                      'qualifying join.'}}
+
+LEGACY_UNCERTAIN_FEEDER_MESSAGE = "🐐 The latest feeder command's outcome is uncertain. Automatic replay is paused for operator reconciliation. Before this request: {accepted_feedings} command(s) accepted and {funding_cycles} CyberHerd funding transfer(s) completed. Physical food delivery is not confirmed."
+
+for _category, _variants in MESSAGE_VARIATIONS.items():
+    SEED_DEFAULTS[_category].update(_variants)
+
+
+EVENING_PAUSE_TEMPLATES = {
+    "0": "🐐 The feeder is resting for the evening while the goats head out to forage. The stream is signing off for the night; we’ll be back when the sun comes up!",
+    "1": "🐐 Evening browsing calls! The goats are off to forage, the feeder is paused, and the stream is winding down for the night. See you when the sun comes up.",
+    "2": "🐐 Bushes and branches are on tonight’s menu. The goats are heading out to forage while the feeder and stream rest until morning. Zaps are still welcome!",
+    "3": "🐐 Time for an evening wander and a few leafy bites. The feeder is paused and the stream is signing off for the night. We’ll see you in the sunshine!",
+    "4": "🐐 The goats are trading feeder snacks for evening forage. The feeder is paused and the stream is closing for the night; back when the sun comes up.",
+    "5": "🐐 That’s our cue to browse! The goats are heading out to forage, and the feeder and stream are settling down for the night. Catch us again in the morning.",
+    "6": "🐐 The feeder is taking its evening rest while the goats go foraging. The stream is signing off until sunrise. Zaps can still arrive while we’re away!",
+    "7": "🐐 A few more leaves before bedtime! The goats are off to forage, the feeder is paused, and the stream is wrapping up for the night. Back with the morning sun.",
+}
+STREAM_CHAT_NOTICES["feeder_requests_paused_night"] = EVENING_PAUSE_TEMPLATES
+SEED_DEFAULTS["feeder_requests_paused_night"] = EVENING_PAUSE_TEMPLATES

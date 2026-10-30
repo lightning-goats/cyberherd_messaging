@@ -402,3 +402,27 @@ For issues, questions, or contributions, please visit the [GitHub repository](ht
 ---
 
 **Note**: For detailed NIP compliance information, see [NIP_COMPLIANCE_REPORT.md](NIP_COMPLIANCE_REPORT.md).
+
+## Stream chat, score summaries and evening notices
+
+Durable CyberHerd messages support both kind-1 notes and kind-1311 stream chat,
+including replies in each member's joining conversation. Signing kind 9734
+supports outgoing NIP-57 treat zap requests; requests go to recipient LNURL
+callbacks rather than being published directly. Existing signer permissions
+remain subject to Nsec Oracle authorization.
+
+Migrations 6–12 add editable payout breakdowns, context-appropriate membership
+and feeder summaries, zap comments, stream invitations, and pause/resume
+notices. Invitation and evening pause pools each contain eight variations;
+ordinary pause and resume pools each contain six. The evening category is
+`feeder_requests_paused_night`. Other member and feeder pools also have expanded
+variations. Score summaries are separated from preceding content by a blank
+line.
+
+Migration 10 replaces only exact obsolete stock pause/resume wording and adds
+variants. Migration 11 expands existing categories; migration 12 installs the
+evening category once. Custom rows remain intact, completion markers preserve
+later deletions, and removed existing categories are not recreated by the
+variation upgrade. Migration entry points use LNbits' supplied transaction
+connection. Durable delivery identity belongs to CyberHerd and prevents
+restarts or solar-context changes from repeating a state-transition notice.

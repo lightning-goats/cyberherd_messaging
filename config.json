@@ -33,6 +33,16 @@
         "count": 200,
         "seconds": 86400
       }
+    },
+    {
+      "kind": 9734,
+      "kind_label": "Lightning Zap Request",
+      "description": "Signs CyberHerd member treat requests for recipient LNURL callbacks; requests are not published directly to relays.",
+      "required": false,
+      "recommended_rate_limit": {
+        "count": 200,
+        "seconds": 86400
+      }
     }
   ]
 }
