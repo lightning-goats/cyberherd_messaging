@@ -752,6 +752,55 @@ def _strip_nostr_mentions(text: str, replacement: str = "") -> str:
     return cleaned
 
 
+def _websocket_mention_pubkey(token):
+    from bech32 import bech32_decode, convertbits
+
+    try:
+        hrp, words = bech32_decode(token.lower().removeprefix("nostr:"))
+        payload = bytes(convertbits(words, 5, 8, False))
+        if hrp == "nprofile":
+            while len(payload) >= 2:
+                tag, length = payload[:2]
+                value, payload = payload[2 : 2 + length], payload[2 + length :]
+                if tag == 0 and length == 32:
+                    return value.hex()
+            return None
+        return payload.hex()
+    except (TypeError, ValueError):
+        return None
+
+
+def member_websocket_content(content, values, pubkey=None):
+    """Reuse the public wording while replacing Nostr mentions with display names."""
+    item = values.get("cyber_herd_item") or {}
+    names = {}
+    for key, name in (
+        (
+            pubkey or values.get("member_pubkey") or values.get("pubkey"),
+            values.get("member_display_name")
+            or values.get("display_name")
+            or values.get("attacker_display_name")
+            or item.get("display_name")
+            or values.get("name"),
+        ),
+        (values.get("attacker_pubkey"), values.get("attacker_display_name")),
+        (values.get("victim_pubkey"), values.get("victim_display_name")),
+    ):
+        if key and name and not _looks_like_mention(name):
+            names[str(key).lower()] = str(name)
+    for member in (values.get("herd_shares") or {}).get("members", []):
+        if member.get("pubkey") and member.get("name"):
+            names.setdefault(member["pubkey"].lower(), member["name"])
+
+    def replace(match):
+        return names.get(_websocket_mention_pubkey(match.group(0)), "Member")
+
+    result = _NOSTR_MENTION_RE.sub(replace, content)
+    for name in names.values():
+        result = result.replace(f"{name} ({name})", name)
+    return _strip_nostr_mentions(result, "Member")
+
+
 async def render_and_publish_template(
     *,
     user_id: str,
@@ -1218,7 +1267,25 @@ async def publish_signed_note(signed: dict, *, wallet_id: str, user_id: str) -> 
         return False
 
 
+def interaction_category(event_type, values):
+    kind = values.get("interaction_kind")
+    amount = values.get("increase_amount", values.get("initial_amount", values.get("attacker_amount", 0)))
+    if kind is None:
+        if amount and int(amount) > 0:
+            kind = 9734
+        elif "repost" in event_type or event_type.startswith("kind_6"):
+            kind = 6
+        elif "reaction" in event_type or event_type.startswith("kind_7"):
+            kind = 7
+    if kind == 9734 and amount and int(amount) > 0:
+        values["interaction_sats"] = int(amount)
+        return "cyber_herd_zap_interaction"
+    return {6: "cyber_herd_repost_interaction", 7: "cyber_herd_like_interaction"}.get(kind)
+
+
 async def render_member_message(event_type, values, pubkey, user_id, nudge=False):
+    values = dict(values)
+    values["interaction_category"] = interaction_category(event_type, values)
     """Render durable member notices using this extension's user templates."""
 
     # NIP-27 mention plus a p tag in the publisher; retain the human-readable name.
@@ -1232,6 +1299,8 @@ async def render_member_message(event_type, values, pubkey, user_id, nudge=False
         "cyber_herd_treats",
         "cyber_herd_treats_skipped",
         "member_thread",
+        "member_removed",
+        "member_added",
     }:
         category = (
             "cyber_herd_no_treats"
@@ -1297,8 +1366,11 @@ def append_score_footer(content, footer):
 
 async def append_current_score(content, values, user_id):
     snapshot = values.get("current_score")
+    category = values.get("interaction_category")
+    interaction = await render_stored_template(category, values, user_id) if category else None
     if not snapshot:
-        return content
+        content = append_score_footer(content, interaction) if interaction else content
+        return await append_herd_shares(content, values, user_id)
     if snapshot.get("status") == "not_admitted":
         footer = await render_stored_template("cyber_herd_unadmitted_score", {}, user_id)
     else:
@@ -1318,10 +1390,33 @@ async def append_current_score(content, values, user_id):
                 {"earned_points": format(snapshot["earned_points"], ".8g")}, user_id,
             )
             footer = gain + "\n\n" + footer
+    if interaction:
+        footer = interaction + "\n\n" + footer
     content = append_score_footer(content, footer)
     if values.get("herd_capacity"):
         content = await append_herd_capacity(content, values["herd_capacity"], user_id)
-    return content
+    return await append_herd_shares(content, values, user_id)
+
+
+async def append_herd_shares(content, values, user_id):
+    snapshot = values.get("herd_shares")
+    if snapshot is None:
+        return content
+    try:
+        if not snapshot["members"]:
+            footer = await render_stored_template("cyber_herd_share_empty", {}, user_id)
+        else:
+            lines = [await render_stored_template("cyber_herd_share_header",
+                {"pool_percent": format(snapshot["pool_percent"], ".8g")}, user_id)]
+            for member in snapshot["members"]:
+                lines.append(await render_stored_template("cyber_herd_share_row",
+                    {"name": member["name"], "share_percent": format(member["share_percent"], ".6f").rstrip("0").rstrip(".")}, user_id))
+            footer = "\n".join(lines)
+    except LookupError:
+        # Removing the optional snapshot category opts out without suppressing
+        # the underlying interaction message. Other database failures defer it.
+        return content
+    return append_score_footer(content, footer)
 
 
 async def append_herd_capacity(content, values, user_id):
@@ -1342,9 +1437,14 @@ async def render_stream_notice(event_type, values, user_id):
 
 async def render_feeder_message(values, user_id):
     """A single payment announcement using database-backed message wording."""
-    content = await render_stored_template("feeder_command_accepted", values, user_id)
-    summary = await render_stored_template("feeder_batch_summary", values, user_id)
-    content = append_score_footer(content, summary)
+    bundle = await build_message_bundle(
+        "feeder_triggered",
+        new_amount=values.get("new_amount", 0),
+        difference=values.get("difference", 0),
+        user_id=user_id,
+        require_database=True,
+    )
+    content = bundle.nostr_content or bundle.websocket_content
     if values.get("herd_score"):
         snapshot = values["herd_score"]
         footer = await render_stored_template(

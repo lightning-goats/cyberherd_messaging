@@ -294,7 +294,7 @@ SEED_DEFAULTS["cyber_herd_treat_breakdown"] = {
 
 CONTEXT_SUMMARIES = {
     "cyber_herd_current_score": {
-        "0": "Your current points:\n⚡ Zaps: {zap_sats} sats → {zap_points} points\n🔁 Repost: {repost_points} points\n❤️ Like: {like_points} points\nTotal: {total_points} points · Current share: {share_percent}%\nShares can change before distribution.",
+        "0": "Your current points:\n⚡ Zaps: {zap_sats} sats → {zap_points} points\n🔁 Repost: {repost_points} points\n❤️ Like: {like_points} points\nTotal: {total_points} points · Current share: {share_percent}%",
     },
     "cyber_herd_interaction_score": {
         "0": "This interaction added {earned_points} points.",
@@ -303,7 +303,7 @@ CONTEXT_SUMMARIES = {
         "0": "This attempt did not earn membership points or a share. Qualifying likes and reposts can count after a later qualifying join.",
     },
     "cyber_herd_feeder_score": {
-        "0": "Herd snapshot: {active_members} active members · {total_points} total points\nMember allocation: {member_allocation}%\nShares can change before distribution.",
+        "0": "Herd snapshot: {active_members} active members · {total_points} total points\nMember allocation: {member_allocation}%",
     },
 }
 SEED_DEFAULTS.update(CONTEXT_SUMMARIES)
@@ -564,3 +564,21 @@ EVENING_PAUSE_TEMPLATES = {
 }
 STREAM_CHAT_NOTICES["feeder_requests_paused_night"] = EVENING_PAUSE_TEMPLATES
 SEED_DEFAULTS["feeder_requests_paused_night"] = EVENING_PAUSE_TEMPLATES
+
+
+INTERACTION_LABELS = {
+    "cyber_herd_zap_interaction": {"0": "⚡ Zap: {interaction_sats} sats."},
+    "cyber_herd_repost_interaction": {"0": "🔁 Interaction: repost."},
+    "cyber_herd_like_interaction": {"0": "❤️ Interaction: like."},
+}
+SEED_DEFAULTS.update(INTERACTION_LABELS)
+
+
+ALLOCATION_MESSAGES = {
+    "cyber_herd_share_header": {"0": "Current CyberHerd shares ({pool_percent}% member pool):"},
+    "cyber_herd_share_row": {"0": "🐐 {name} — {share_percent}%"},
+    "cyber_herd_share_empty": {"0": "🐐 No active CyberHerd members."},
+    "member_removed": {"0": "🐐 {name} has left the CyberHerd."},
+    "member_added": {"0": "🐐 {name} is now in the CyberHerd."},
+}
+SEED_DEFAULTS.update(ALLOCATION_MESSAGES)

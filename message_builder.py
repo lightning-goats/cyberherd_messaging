@@ -699,8 +699,8 @@ async def build_message(
         display_name = ch_item.get("display_name", "Anon")
         pub_key = ch_item.get("pubkey", "")
         nprofile = _normalize_nprofile(ch_item.get("nprofile"))
-        amount = ch_item.get("amount", 0)
-        increase_amount = ch_item.get("new_zap_amount", 0)
+        amount = ch_item.get("new_total", ch_item.get("amount", 0))
+        increase_amount = ch_item.get("increase_amount", ch_item.get("new_zap_amount", 0))
         nostr_name = format_nostr_pubkey(pub_key) or nprofile or display_name
 
         spots_info, nostr_headbutt_text, ws_headbutt_text = _build_spots_and_headbutt_info(spots_remaining, ch_item, _pool)

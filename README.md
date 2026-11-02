@@ -38,8 +38,10 @@ A comprehensive messaging infrastructure extension for LNbits that provides dual
 
 Successful payouts reuse `cyber_herd_treats`, with six additional goat-themed
 variants. Shares too small to send use the separate `cyber_herd_no_treats` category
-with six variants. `repost_hint`, `member_thread`, and `feeder_batch_summary` hold
-optional hints, membership-thread anchors and per-payment feeding summaries.
+with six variants. `repost_hint` holds optional hints. Feeder announcements use the historical
+`feeder_trigger` pool; CyberHerd suppresses command and batch diagnostic categories
+from public publication. Older member-thread anchors remain readable, but new
+payout notices wait for the original interaction thread.
 Member templates support `{name}` (including the Nostr mention), paid notices
 support `{new_amount}`, and summaries support `{feedings}` and `{payout_cycles}`.
 
@@ -426,3 +428,16 @@ later deletions, and removed existing categories are not recreated by the
 variation upgrade. Migration entry points use LNbits' supplied transaction
 connection. Durable delivery identity belongs to CyberHerd and prevents
 restarts or solar-context changes from repeating a state-transition notice.
+
+## Member announcement destinations and display names
+
+CyberHerd queues joins and updates in both their regular note conversation and
+the active stream chat. Each destination retains its own signed receipt, while
+the original note conversation remains the payout thread. The websocket overlay
+receives only one announcement and converts `npub` and `nprofile` mentions to each
+participant's display name; Nostr messages retain their mentions and tags.
+
+Migrations 13–14 add explicit zap/repost/like interaction wording and editable
+herd-share snapshot templates. Custom content and category deletions are preserved.
+Feeder announcements render from the database's historical `feeder_trigger` pool,
+without appending command-acceptance or batch diagnostic text.

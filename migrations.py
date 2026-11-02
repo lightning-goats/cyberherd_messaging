@@ -312,3 +312,74 @@ async def seed_evening_pause_templates(db, *, schema=None):
 async def m012_seed_evening_pause_templates(db):
     # LNbits supplies the transaction connection to migration entry points.
     await seed_evening_pause_templates(db)
+
+
+async def refresh_interaction_messages(db):
+    """Remove the requested status sentence and seed interaction labels once."""
+    from .defaults import INTERACTION_LABELS
+
+    schema = db.references_schema
+    rows = await db.fetchall(f"SELECT user_id,category,key,content FROM {schema}message_templates")
+    owners = {row["user_id"] for row in rows}
+    for row in rows:
+        content = row["content"].replace("\nShares can change before distribution.", "").replace("Shares can change before distribution.", "")
+        if content != row["content"]:
+            await db.execute(
+                f"UPDATE {schema}message_templates SET content=:content,updated_at=CURRENT_TIMESTAMP "
+                "WHERE user_id=:uid AND category=:category AND key=:key AND content=:old",
+                {"uid": row["user_id"], "category": row["category"], "key": row["key"],
+                 "old": row["content"], "content": content},
+            )
+    for uid in owners:
+        marker = "interaction_labels_v1"
+        if await db.fetchone(
+            f"SELECT value FROM {schema}user_settings WHERE user_id=:uid AND key=:key",
+            {"uid": uid, "key": marker},
+        ):
+            continue
+        for category, templates in INTERACTION_LABELS.items():
+            for key, content in templates.items():
+                await db.execute(
+                    f"INSERT INTO {schema}message_templates (user_id,category,key,content) "
+                    "VALUES (:uid,:category,:key,:content) ON CONFLICT (user_id,category,key) DO NOTHING",
+                    {"uid": uid, "category": category, "key": key, "content": content},
+                )
+        await db.execute(
+            f"INSERT INTO {schema}user_settings (user_id,key,value) VALUES (:uid,:key,'1') "
+            "ON CONFLICT (user_id,key) DO NOTHING", {"uid": uid, "key": marker},
+        )
+
+
+async def m013_refresh_interaction_messages(db):
+    await refresh_interaction_messages(db)
+
+
+async def seed_allocation_messages(db):
+    """Add editable herd snapshots once, preserving custom rows and deletions."""
+    from .defaults import ALLOCATION_MESSAGES
+
+    schema = db.references_schema
+    owners = await db.fetchall(f"SELECT user_id FROM {schema}message_templates UNION SELECT user_id FROM {schema}user_settings")
+    for owner in owners:
+        uid = owner["user_id"]
+        marker = "allocation_messages_v1"
+        if not uid or await db.fetchone(
+            f"SELECT value FROM {schema}user_settings WHERE user_id=:uid AND key=:key",
+            {"uid": uid, "key": marker},
+        ):
+            continue
+        for category, templates in ALLOCATION_MESSAGES.items():
+            for key, content in templates.items():
+                await db.execute(
+                    f"INSERT INTO {schema}message_templates (user_id,category,key,content) "
+                    "VALUES (:uid,:category,:key,:content) ON CONFLICT (user_id,category,key) DO NOTHING",
+                    {"uid": uid, "category": category, "key": key, "content": content},
+                )
+        await db.execute(
+            f"INSERT INTO {schema}user_settings (user_id,key,value) VALUES (:uid,:key,'1') "
+            "ON CONFLICT (user_id,key) DO NOTHING", {"uid": uid, "key": marker},
+        )
+
+
+async def m014_seed_allocation_messages(db):
+    await seed_allocation_messages(db)
